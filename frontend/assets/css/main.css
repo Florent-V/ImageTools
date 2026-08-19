@@ -1,0 +1,9 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+@layer base {
+  ::selection {
+    background-color: var(--ui-primary);
+    color: var(--ui-bg);
+  }
+}
