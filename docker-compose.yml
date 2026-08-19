@@ -1,0 +1,12 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      IMGCONV_MAX_FILE_SIZE_MB: ${MAX_UPLOAD_MB:-50}
+      IMGCONV_MAX_MEGAPIXELS: 100
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
