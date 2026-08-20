@@ -1,4 +1,4 @@
-.PHONY: help up down restart logs ps build rebuild dev install test lint clean up-home down-home logs-home up-remote down-remote logs-remote
+.PHONY: help up down restart logs ps build rebuild dev install test lint audit clean up-home down-home logs-home up-remote down-remote logs-remote
 
 BACKEND_DIR := backend
 
@@ -13,6 +13,7 @@ help:
 	@echo "dev       - start dev stack with hot reload (docker compose up, base + override)"
 	@echo "install   - uv sync (with dev deps) in backend/"
 	@echo "test      - run pytest in backend/"
+	@echo "audit     - run pnpm audit (high+ severity) in frontend/"
 	@echo "clean     - remove backend .venv and caches"
 	@echo "up-home     - start LAN self-hosted stack (backend+frontend+caddy on :8080)"
 	@echo "down-home   - stop LAN self-hosted stack"
@@ -50,6 +51,9 @@ install:
 
 test:
 	cd $(BACKEND_DIR) && uv run pytest
+
+audit:
+	cd frontend && pnpm audit --audit-level=high
 
 clean:
 	rm -rf $(BACKEND_DIR)/.venv $(BACKEND_DIR)/.pytest_cache

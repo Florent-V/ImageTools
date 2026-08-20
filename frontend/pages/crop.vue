@@ -34,16 +34,13 @@
 </template>
 
 <script setup lang="ts">
-import { ApiError, fetchFormats, inspectImage, type CropOp, type InspectResponse, type OutputSpec } from '~/utils/api'
+import type { CropOp, OutputSpec } from '~/utils/api'
 
-const { data: formats } = await useAsyncData('formats', fetchFormats, { server: false })
-const { queue, enqueue, process } = useProcessor()
+const { formats, queue, enqueue, run: runProcess, running } = await useToolPage()
+const { inspected, inspectError, inspectFirst } = useFirstFileInspect()
 
 const previewSrc = ref<string>()
-const inspected = ref<InspectResponse>()
 const cropOp = ref<CropOp | null>(null)
-const inspectError = ref<string>()
-const running = ref(false)
 
 // Crop only removes pixels — output keeps the source format at max quality,
 // metadata untouched, no other transformation (no OutputForm on this page).
@@ -62,22 +59,12 @@ async function onFilesSelected(files: File[]) {
   enqueue(files)
   if (!previewSrc.value && files[0]) {
     previewSrc.value = URL.createObjectURL(files[0])
-    inspectError.value = undefined
-    try {
-      inspected.value = await inspectImage(files[0])
-    } catch (err) {
-      inspectError.value = err instanceof ApiError ? err.message : "Impossible d'analyser cette image."
-    }
+    await inspectFirst(files[0])
   }
 }
 
 async function run() {
   if (!cropOp.value) return
-  running.value = true
-  try {
-    await process({ ops: [cropOp.value], output: output.value })
-  } finally {
-    running.value = false
-  }
+  await runProcess({ ops: [cropOp.value], output: output.value })
 }
 </script>

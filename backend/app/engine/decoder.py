@@ -16,6 +16,18 @@ READ_FORMATS: frozenset[str] = frozenset(
 )
 
 
+def check_pixel_limit(width: int, height: int) -> None:
+    """Shared by decode() below and /inspect, which reports dimensions without
+    fully decoding — both must reject the same oversized images."""
+    if width * height > settings.max_pixels:
+        raise ImageError(
+            "IMAGE_TOO_LARGE",
+            f"Image exceeds the {settings.max_megapixels} megapixel limit",
+            width=width,
+            height=height,
+        )
+
+
 @dataclass
 class Decoded:
     image: Image.Image
@@ -60,13 +72,7 @@ def decode(data: bytes) -> Decoded:
     # Image.open is lazy — size is known before any pixel is decoded, which
     # is what makes this check a defence against decompression bombs.
     width, height = image.size
-    if width * height > settings.max_pixels:
-        raise ImageError(
-            "IMAGE_TOO_LARGE",
-            f"Image exceeds the {settings.max_megapixels} megapixel limit",
-            width=width,
-            height=height,
-        )
+    check_pixel_limit(width, height)
 
     icc_profile = image.info.get("icc_profile")
     source_format = image.format

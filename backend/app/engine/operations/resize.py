@@ -1,5 +1,7 @@
 from PIL import Image
 
+from app.config import settings
+from app.errors import ImageError
 from app.schemas.operations import ResizeOp
 
 RESAMPLE = Image.Resampling.LANCZOS
@@ -32,6 +34,18 @@ def _target_size(current: tuple[int, int], op: ResizeOp) -> tuple[int, int]:
 
 def apply(image: Image.Image, op: ResizeOp) -> Image.Image:
     target = _target_size(image.size, op)
+
+    # Each dimension is bounded individually by the schema, but their product
+    # isn't — a tiny source image can still request a huge output allocation.
+    # Checked before no_upscale, which only skips the resize for the *source*
+    # image's own size, not for an oversized explicit target.
+    if target[0] * target[1] > settings.max_pixels:
+        raise ImageError(
+            "IMAGE_TOO_LARGE",
+            f"Requested resize output exceeds the {settings.max_megapixels} megapixel limit",
+            width=target[0],
+            height=target[1],
+        )
 
     if op.no_upscale and (target[0] > image.size[0] or target[1] > image.size[1]):
         return image

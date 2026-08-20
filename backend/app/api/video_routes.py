@@ -1,70 +1,32 @@
 import base64
-import json
-import tempfile
-from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Response, UploadFile
-from pydantic import ValidationError
 
+from app.api._shared import parse_body, read_upload
+from app.concurrency import job_semaphore
 from app.config import settings
-from app.engine.video import frame, presets, probe, transcode
+from app.engine.video import frame, pipeline, presets
 from app.engine.video.runner import FfmpegError
+from app.engine.video.tempfiles import temp_video_file
 from app.errors import ImageError
 from app.schemas.video import VideoProcessRequest
 
 router = APIRouter(prefix="/api/video")
 
 
-async def _read_upload(file: UploadFile) -> bytes:
-    """Read the body, refusing anything past the video size limit without buffering it all."""
-    chunks: list[bytes] = []
-    total = 0
-    while chunk := await file.read(1024 * 1024):
-        total += len(chunk)
-        if total > settings.max_video_file_size_bytes:
-            raise ImageError(
-                "VIDEO_TOO_LARGE",
-                f"File exceeds the {settings.max_video_file_size_mb} MB limit",
-                limit_bytes=settings.max_video_file_size_bytes,
-            )
-        chunks.append(chunk)
-    return b"".join(chunks)
-
-
-def _write_temp(data: bytes, suffix: str) -> Path:
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(data)
-        return Path(tmp.name)
-
-
-async def _probe_and_validate(data: bytes) -> tuple[Path, probe.VideoInfo]:
-    path = _write_temp(data, ".mp4")
-    try:
-        info = await probe.probe(path)
-    except (ValueError, FfmpegError):
-        path.unlink(missing_ok=True)
-        raise ImageError("UNSUPPORTED_VIDEO_FORMAT", "Unrecognised or unreadable video file")
-
-    if info.duration_s > settings.max_video_duration_s:
-        path.unlink(missing_ok=True)
-        raise ImageError(
-            "VIDEO_TOO_LONG",
-            f"Video exceeds the {settings.max_video_duration_s}s limit",
-            duration_s=info.duration_s,
-        )
-    return path, info
+async def _read_video_upload(file: UploadFile) -> bytes:
+    return await read_upload(file, settings.max_video_file_size_bytes, settings.max_video_file_size_mb, "VIDEO_TOO_LARGE")
 
 
 @router.post("/inspect")
 async def inspect_video(file: UploadFile = File(...)) -> dict:
-    data = await _read_upload(file)
-    path, info = await _probe_and_validate(data)
-    try:
-        frame_bytes = await frame.extract_preview_frame(path, info.duration_s)
-    except FfmpegError:
-        raise ImageError("VIDEO_PROCESSING_FAILED", "Could not extract a preview frame")
-    finally:
-        path.unlink(missing_ok=True)
+    data = await _read_video_upload(file)
+    with temp_video_file(data) as path:
+        info = await pipeline.validate_video(path)
+        try:
+            frame_bytes = await frame.extract_preview_frame(path, info.duration_s)
+        except FfmpegError:
+            raise ImageError("VIDEO_PROCESSING_FAILED", "Could not extract a preview frame")
 
     preview_data_uri = "data:image/jpeg;base64," + base64.b64encode(frame_bytes).decode("ascii")
     return {
@@ -79,15 +41,14 @@ async def inspect_video(file: UploadFile = File(...)) -> dict:
 
 @router.post("/frame")
 async def video_frame(file: UploadFile = File(...), timestamp_s: float = Form(...)) -> dict:
-    data = await _read_upload(file)
-    path, info = await _probe_and_validate(data)
-    try:
-        clamped = max(0.0, min(timestamp_s, info.duration_s))
-        frame_bytes = await frame.extract_frame(path, clamped)
-    except FfmpegError:
-        raise ImageError("VIDEO_PROCESSING_FAILED", "Could not extract a preview frame")
-    finally:
-        path.unlink(missing_ok=True)
+    data = await _read_video_upload(file)
+    with temp_video_file(data) as path:
+        info = await pipeline.validate_video(path)
+        try:
+            clamped = max(0.0, min(timestamp_s, info.duration_s))
+            frame_bytes = await frame.extract_frame(path, clamped)
+        except FfmpegError:
+            raise ImageError("VIDEO_PROCESSING_FAILED", "Could not extract a preview frame")
 
     return {"preview_frame": "data:image/jpeg;base64," + base64.b64encode(frame_bytes).decode("ascii")}
 
@@ -97,33 +58,11 @@ async def process_video(
     file: UploadFile = File(...),
     request: str = Form(...),
 ) -> Response:
-    try:
-        parsed = VideoProcessRequest.model_validate(json.loads(request))
-    except (json.JSONDecodeError, ValidationError) as exc:
-        raise ImageError("INVALID_OPERATION", "The request payload is invalid", reason=str(exc))
+    parsed = parse_body(VideoProcessRequest, request)
+    data = await _read_video_upload(file)
 
-    data = await _read_upload(file)
-    path, info = await _probe_and_validate(data)
-
-    if parsed.crop is not None:
-        crop = parsed.crop
-        if crop.x + crop.width > info.width or crop.y + crop.height > info.height:
-            path.unlink(missing_ok=True)
-            raise ImageError(
-                "INVALID_OPERATION",
-                "Crop rectangle does not fit inside the source video",
-                source_width=info.width,
-                source_height=info.height,
-            )
-
-    try:
-        encoded = await transcode.transcode(
-            path, parsed.crop, parsed.output, timeout_s=settings.video_timeout_s
-        )
-    except FfmpegError:
-        raise ImageError("VIDEO_PROCESSING_FAILED", "The video could not be processed")
-    finally:
-        path.unlink(missing_ok=True)
+    async with job_semaphore:
+        encoded = await pipeline.process_video(data, parsed)
 
     return Response(
         content=encoded,

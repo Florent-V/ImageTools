@@ -33,15 +33,12 @@
 </template>
 
 <script setup lang="ts">
-import { ApiError, fetchFormats, inspectImage, type InspectResponse, type OutputSpec, type WatermarkOp } from '~/utils/api'
+import type { OutputSpec, WatermarkOp } from '~/utils/api'
 
-const { data: formats } = await useAsyncData('formats', fetchFormats, { server: false })
-const { queue, enqueue, process } = useProcessor()
+const { formats, queue, enqueue, run: runProcess, running } = await useToolPage()
+const { inspected, inspectError, inspectFirst } = useFirstFileInspect()
 
 const previewSrc = ref<string>()
-const inspected = ref<InspectResponse>()
-const inspectError = ref<string>()
-const running = ref(false)
 const watermarkFile = ref<File>()
 
 const watermarkOp = ref<WatermarkOp>({
@@ -78,22 +75,12 @@ async function onFilesSelected(files: File[]) {
   enqueue(files)
   if (!previewSrc.value && files[0]) {
     previewSrc.value = URL.createObjectURL(files[0])
-    inspectError.value = undefined
-    try {
-      inspected.value = await inspectImage(files[0])
-    } catch (err) {
-      inspectError.value = err instanceof ApiError ? err.message : "Impossible d'analyser cette image."
-    }
+    await inspectFirst(files[0])
   }
 }
 
 async function run() {
   if (!canRun.value) return
-  running.value = true
-  try {
-    await process({ ops: [watermarkOp.value], output: output.value }, watermarkFile.value)
-  } finally {
-    running.value = false
-  }
+  await runProcess({ ops: [watermarkOp.value], output: output.value }, watermarkFile.value)
 }
 </script>

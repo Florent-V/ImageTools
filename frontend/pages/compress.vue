@@ -27,17 +27,15 @@
 </template>
 
 <script setup lang="ts">
-import { fetchFormats, type OutputSpec } from '~/utils/api'
+import type { OutputSpec } from '~/utils/api'
 import { detectWritableFormat } from '~/utils/fileFormat'
 import type { QueueItem } from '~/composables/useProcessor'
 
-const { data: formats } = await useAsyncData('formats', fetchFormats, { server: false })
-const { queue, enqueue, process } = useProcessor()
+const { formats, queue, enqueue, run: runProcess, running } = await useToolPage()
 
 // format is a placeholder here — the actual per-file format is resolved at
 // request-build time in run() so each image keeps its own original format.
 const output = ref<OutputSpec>({ format: 'jpeg', preset: 'recommended', strip_metadata: false })
-const running = ref(false)
 
 const unwritableNames = computed(() =>
   queue.value.filter((item) => !detectWritableFormat(item.file.name)).map((item) => item.file.name),
@@ -48,14 +46,9 @@ function onFilesSelected(files: File[]) {
 }
 
 async function run() {
-  running.value = true
-  try {
-    await process((item: QueueItem) => ({
-      ops: [],
-      output: { ...output.value, format: detectWritableFormat(item.file.name) ?? 'jpeg' },
-    }))
-  } finally {
-    running.value = false
-  }
+  await runProcess((item: QueueItem) => ({
+    ops: [],
+    output: { ...output.value, format: detectWritableFormat(item.file.name) ?? 'jpeg' },
+  }))
 }
 </script>

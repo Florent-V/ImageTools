@@ -73,7 +73,7 @@ async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResp
         content={
             "error": {
                 "code": "PROCESSING_FAILED",
-                "message": "The image could not be processed",
+                "message": "The request could not be processed",
                 "detail": {},
             }
         },

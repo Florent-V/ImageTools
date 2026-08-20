@@ -20,24 +20,17 @@
 </template>
 
 <script setup lang="ts">
-import { fetchFormats, type OutputSpec } from '~/utils/api'
+import type { OutputSpec } from '~/utils/api'
 
-const { data: formats } = await useAsyncData('formats', fetchFormats, { server: false })
-const { queue, enqueue, process } = useProcessor()
+const { formats, queue, enqueue, run: runProcess, running } = await useToolPage()
 
 const output = ref<OutputSpec>({ format: 'jpeg', quality: 100, strip_metadata: false })
-const running = ref(false)
 
 function onFilesSelected(files: File[]) {
   enqueue(files)
 }
 
 async function run() {
-  running.value = true
-  try {
-    await process({ ops: [], output: output.value })
-  } finally {
-    running.value = false
-  }
+  await runProcess({ ops: [], output: output.value })
 }
 </script>

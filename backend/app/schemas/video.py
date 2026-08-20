@@ -2,16 +2,15 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.operations import Rect
+
 VideoQuality = Literal["light", "recommended", "strong", "max"]
 VideoContainer = Literal["mp4", "mov", "mkv", "webm"]
 VideoFps = Literal["original", 30, 60]
 
 
-class VideoCropRect(BaseModel):
-    x: int = Field(ge=0)
-    y: int = Field(ge=0)
-    width: int = Field(gt=0)
-    height: int = Field(gt=0)
+class VideoCropRect(Rect):
+    pass
 
 
 class VideoOutputSpec(BaseModel):

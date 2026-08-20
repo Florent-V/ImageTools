@@ -2,17 +2,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.schemas.operations import MAX_DIMENSION
+from app.schemas.operations import Rect
 
 HEX_COLOR_PATTERN = r"^#[0-9a-fA-F]{6}$"
 
 
-class PwaCropRect(BaseModel):
-    x: int = Field(ge=0, le=MAX_DIMENSION)
-    y: int = Field(ge=0, le=MAX_DIMENSION)
-    width: int = Field(gt=0, le=MAX_DIMENSION)
-    height: int = Field(gt=0, le=MAX_DIMENSION)
-
+class PwaCropRect(Rect):
     @model_validator(mode="after")
     def check_square(self):
         if self.width != self.height:

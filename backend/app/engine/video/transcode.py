@@ -1,8 +1,8 @@
-import tempfile
 from pathlib import Path
 
 from app.engine.video.presets import CRF_BY_QUALITY
 from app.engine.video.runner import run_ffmpeg
+from app.engine.video.tempfiles import temp_output_path
 from app.schemas.video import VideoCropRect, VideoOutputSpec
 
 # container id -> (file suffix, ffmpeg muxer -f value, video codec args, audio codec args)
@@ -14,6 +14,10 @@ _CONTAINER_SPECS: dict[str, tuple[str, str, list[str], list[str]]] = {
 }
 
 
+# No operations registry here, unlike engine/operations/: video ops aren't
+# composable PIL functions, they're ffmpeg filter-string fragments assembled
+# into one -vf chain. A registry would add an abstraction layer with nothing
+# to plug into it beyond this one filter list.
 async def transcode(
     path: Path,
     crop: VideoCropRect | None,
@@ -30,9 +34,7 @@ async def transcode(
     crf = CRF_BY_QUALITY[output.quality]
     suffix, muxer, video_codec_args, audio_codec_args = _CONTAINER_SPECS[output.container]
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        out_path = Path(tmp.name)
-    try:
+    with temp_output_path(suffix) as out_path:
         cmd = [
             "ffmpeg", "-y",
             "-i", str(path),
@@ -46,5 +48,3 @@ async def transcode(
         cmd += ["-f", muxer, str(out_path)]
         await run_ffmpeg(cmd, timeout_s=timeout_s)
         return out_path.read_bytes()
-    finally:
-        out_path.unlink(missing_ok=True)

@@ -1,14 +1,12 @@
-import asyncio
-import json
 from io import BytesIO
 
 from fastapi import APIRouter, File, Form, Response, UploadFile
-from starlette.concurrency import run_in_threadpool
 from PIL import Image, UnidentifiedImageError
-from pydantic import ValidationError
 
+from app.api._shared import parse_body, read_upload, run_with_timeout
+from app.concurrency import job_semaphore
 from app.config import settings
-from app.engine.decoder import READ_FORMATS
+from app.engine.decoder import READ_FORMATS, check_pixel_limit
 from app.engine.encoder import FILE_EXTENSION, MEDIA_TYPE
 from app.engine.pipeline import process
 from app.engine.presets import PRESETS
@@ -20,20 +18,8 @@ router = APIRouter(prefix="/api")
 GPS_IFD = 0x8825
 
 
-async def _read_upload(file: UploadFile) -> bytes:
-    """Read the body, refusing anything past the limit without buffering it all."""
-    chunks: list[bytes] = []
-    total = 0
-    while chunk := await file.read(1024 * 1024):
-        total += len(chunk)
-        if total > settings.max_file_size_bytes:
-            raise ImageError(
-                "FILE_TOO_LARGE",
-                f"File exceeds the {settings.max_file_size_mb} MB limit",
-                limit_bytes=settings.max_file_size_bytes,
-            )
-        chunks.append(chunk)
-    return b"".join(chunks)
+async def _read_image_upload(file: UploadFile) -> bytes:
+    return await read_upload(file, settings.max_file_size_bytes, settings.max_file_size_mb, "FILE_TOO_LARGE")
 
 
 @router.post("/process")
@@ -42,24 +28,14 @@ async def process_image(
     request: str = Form(...),
     watermark_file: UploadFile | None = File(None),
 ) -> Response:
-    try:
-        parsed = ProcessRequest.model_validate(json.loads(request))
-    except (json.JSONDecodeError, ValidationError) as exc:
-        raise ImageError("INVALID_OPERATION", "The request payload is invalid", reason=str(exc))
+    parsed = parse_body(ProcessRequest, request)
 
-    data = await _read_upload(file)
-    watermark_data = await _read_upload(watermark_file) if watermark_file is not None else None
-    # wait_for bounds the client's wait but cannot kill the running thread —
-    # the CPU work continues to completion in the pool (a known Python limit).
-    try:
-        result = await asyncio.wait_for(
-            run_in_threadpool(process, data, parsed, watermark_data),
-            timeout=settings.request_timeout_s,
-        )
-    except asyncio.TimeoutError:
-        raise ImageError(
-            "PROCESSING_FAILED",
-            f"Processing exceeded the {settings.request_timeout_s}s limit",
+    data = await _read_image_upload(file)
+    watermark_data = await _read_image_upload(watermark_file) if watermark_file is not None else None
+
+    async with job_semaphore:
+        result = await run_with_timeout(
+            process, data, parsed, watermark_data, timeout_s=settings.request_timeout_s
         )
 
     return Response(
@@ -91,7 +67,7 @@ async def formats() -> dict:
 
 @router.post("/inspect")
 async def inspect(file: UploadFile = File(...)) -> dict:
-    data = await _read_upload(file)
+    data = await _read_image_upload(file)
 
     try:
         image = Image.open(BytesIO(data))
@@ -105,6 +81,8 @@ async def inspect(file: UploadFile = File(...)) -> dict:
 
     if image.format not in READ_FORMATS:
         raise ImageError("UNSUPPORTED_FORMAT", f"{image.format} files cannot be read")
+
+    check_pixel_limit(image.width, image.height)
 
     exif = image.getexif()
     return {

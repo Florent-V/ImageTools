@@ -2,12 +2,19 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
+from app.engine.decoder import check_pixel_limit
 from app.errors import ImageError
 from app.schemas.operations import WatermarkOp
 
 # Sampled at this size, then linearly rescaled to hit the target pixel width —
 # avoids a search loop for what is a decorative overlay, not typography.
 _SAMPLE_FONT_SIZE = 40
+
+# A narrow sample glyph (e.g. a single "." or "'") gives a tiny sample_width,
+# which without a ceiling drives the rescaled size into the tens of
+# thousands — an unbounded Pillow glyph-raster allocation. No legitimate
+# watermark needs a font taller than this.
+_MAX_FONT_SIZE = 2000
 
 
 def _fit_font_to_width(text: str, target_width: float) -> ImageFont.FreeTypeFont:
@@ -16,7 +23,8 @@ def _fit_font_to_width(text: str, target_width: float) -> ImageFont.FreeTypeFont
     sample_width = bbox[2] - bbox[0]
     if sample_width <= 0:
         return sample
-    size = max(8, round(_SAMPLE_FONT_SIZE * target_width / sample_width))
+    size = round(_SAMPLE_FONT_SIZE * target_width / sample_width)
+    size = max(8, min(_MAX_FONT_SIZE, size))
     return ImageFont.load_default(size=size)
 
 
@@ -24,9 +32,16 @@ def _build_image_tile(base_width: int, op: WatermarkOp, watermark_data: bytes | 
     if watermark_data is None:
         raise ImageError("INVALID_OPERATION", "Image watermark requires a watermark file")
     try:
-        mark = Image.open(BytesIO(watermark_data)).convert("RGBA")
+        mark = Image.open(BytesIO(watermark_data))
+    except Image.DecompressionBombError:
+        raise ImageError("IMAGE_TOO_LARGE", "The watermark image header declares implausibly large dimensions")
     except (UnidentifiedImageError, OSError):
         raise ImageError("UNSUPPORTED_FORMAT", "Unrecognised watermark image format")
+
+    # Image.open is lazy — same bomb defence as the main decode path, applied
+    # here too since this file bypasses app.engine.decoder.decode().
+    check_pixel_limit(mark.width, mark.height)
+    mark = mark.convert("RGBA")
 
     target_width = max(1, round(base_width * op.scale))
     target_height = max(1, round(mark.height * target_width / mark.width))

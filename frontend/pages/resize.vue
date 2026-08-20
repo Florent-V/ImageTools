@@ -21,16 +21,14 @@
 </template>
 
 <script setup lang="ts">
-import { fetchFormats, type OutputSpec, type ResizeOp } from '~/utils/api'
+import type { OutputSpec, ResizeOp } from '~/utils/api'
 
-const { data: formats } = await useAsyncData('formats', fetchFormats, { server: false })
-const { queue, enqueue, process } = useProcessor()
+const { formats, queue, enqueue, run: runProcess, running } = await useToolPage()
 
 const resizeOp = ref<ResizeOp>({ op: 'resize', width: null, height: null, keep_ratio: true, no_upscale: true })
 // Resize never re-encodes lossily on its own — quality stays fixed at the
 // format's max, same rationale as FormatForm on the /convert page.
 const output = ref<OutputSpec>({ format: 'jpeg', quality: 100, strip_metadata: false })
-const running = ref(false)
 
 // Live width<->height linking needs some aspect ratio to compute against —
 // the first queued image with known dimensions stands in for it. Backend
@@ -46,11 +44,6 @@ function onFilesSelected(files: File[]) {
 }
 
 async function run() {
-  running.value = true
-  try {
-    await process({ ops: [resizeOp.value], output: output.value })
-  } finally {
-    running.value = false
-  }
+  await runProcess({ ops: [resizeOp.value], output: output.value })
 }
 </script>

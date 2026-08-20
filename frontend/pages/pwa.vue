@@ -49,9 +49,7 @@ import {
   ApiError,
   fetchFormats,
   generatePwaKit,
-  inspectImage,
   type CropOp,
-  type InspectResponse,
   type PwaGenerateRequest,
   type PwaKitResult,
   type PwaManifestFields,
@@ -59,12 +57,11 @@ import {
 } from '~/utils/api'
 
 const { data: formats } = await useAsyncData('formats', fetchFormats, { server: false })
+const { inspected, inspectError, inspectFirst } = useFirstFileInspect()
 
 const file = ref<File>()
 const previewSrc = ref<string>()
-const inspected = ref<InspectResponse>()
 const cropRect = ref<CropOp | null>(null)
-const inspectError = ref<string>()
 const runError = ref<string>()
 const running = ref(false)
 const result = ref<PwaKitResult | null>(null)
@@ -91,12 +88,7 @@ async function onFilesSelected(files: File[]) {
   cropRect.value = null
   result.value = null
   previewSrc.value = URL.createObjectURL(files[0])
-  inspectError.value = undefined
-  try {
-    inspected.value = await inspectImage(files[0])
-  } catch (err) {
-    inspectError.value = err instanceof ApiError ? err.message : "Impossible d'analyser cette image."
-  }
+  await inspectFirst(files[0])
 }
 
 async function run() {

@@ -1,0 +1,31 @@
+name: Frontend dependency audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - frontend/package.json
+      - frontend/pnpm-lock.yaml
+  pull_request:
+    paths:
+      - frontend/package.json
+      - frontend/pnpm-lock.yaml
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: frontend
+      - run: pnpm run audit
+        working-directory: frontend

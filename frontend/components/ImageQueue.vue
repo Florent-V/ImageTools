@@ -97,6 +97,21 @@ const doneItems = computed(() => props.items.filter((item) => item.status === 'd
 
 const urlCache = new Map<string, string>()
 
+// Items disappear from the prop when the queue is cleared or replaced, not
+// just when this component unmounts — revoke whatever's no longer referenced.
+watch(
+  () => props.items,
+  (current) => {
+    const liveIds = new Set(current.map((item) => item.id))
+    for (const [id, url] of urlCache) {
+      if (!liveIds.has(id)) {
+        URL.revokeObjectURL(url)
+        urlCache.delete(id)
+      }
+    }
+  },
+)
+
 onBeforeUnmount(() => {
   urlCache.forEach((url) => URL.revokeObjectURL(url))
 })

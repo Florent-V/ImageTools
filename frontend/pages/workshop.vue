@@ -79,11 +79,7 @@
 
 <script setup lang="ts">
 import {
-  ApiError,
-  fetchFormats,
-  inspectImage,
   type CropOp,
-  type InspectResponse,
   type Operation,
   type OutputSpec,
   type ResizeOp,
@@ -99,14 +95,11 @@ type PipelineStep =
   | { id: string; kind: 'compress' }
   | { id: string; kind: 'convert' }
 
-const { data: formats } = await useAsyncData('formats', fetchFormats, { server: false })
-const { queue, enqueue, process } = useProcessor()
+const { formats, queue, enqueue, run: runProcess, running } = await useToolPage()
+const { inspected, inspectError, inspectFirst } = useFirstFileInspect()
 
 const previewSrc = ref<string>()
-const inspected = ref<InspectResponse>()
 const steps = ref<PipelineStep[]>([])
-const inspectError = ref<string>()
-const running = ref(false)
 
 // Nothing shown by default — the user builds the pipeline by adding tiles.
 // "Compression"/"Convertir" tiles edit this shared output spec; without them
@@ -125,12 +118,7 @@ async function onFilesSelected(files: File[]) {
   enqueue(files)
   if (!previewSrc.value && files[0]) {
     previewSrc.value = URL.createObjectURL(files[0])
-    inspectError.value = undefined
-    try {
-      inspected.value = await inspectImage(files[0])
-    } catch (err) {
-      inspectError.value = err instanceof ApiError ? err.message : "Impossible d'analyser cette image."
-    }
+    await inspectFirst(files[0])
   }
 }
 
@@ -187,12 +175,7 @@ function buildOutput(item: QueueItem): OutputSpec {
 }
 
 async function run() {
-  running.value = true
-  try {
-    const ops = steps.value.filter(isPipelineOp).map((step) => step.value)
-    await process((item: QueueItem) => ({ ops, output: buildOutput(item) }))
-  } finally {
-    running.value = false
-  }
+  const ops = steps.value.filter(isPipelineOp).map((step) => step.value)
+  await runProcess((item: QueueItem) => ({ ops, output: buildOutput(item) }))
 }
 </script>

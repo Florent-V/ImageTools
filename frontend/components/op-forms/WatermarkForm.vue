@@ -86,7 +86,8 @@
 
 <script setup lang="ts">
 import type { WatermarkOp } from '~/utils/api'
-import { PREVIEW_IMG_CLASS, PREVIEW_WRAP_CLASS } from '~/utils/previewLayout'
+import { PREVIEW_IMG_CLASS, PREVIEW_WRAP_CLASS, relativePoint } from '~/utils/previewLayout'
+import { usePointerDrag } from '~/composables/usePointerDrag'
 
 const props = defineProps<{
   modelValue: WatermarkOp
@@ -184,35 +185,27 @@ const textFontSizePx = computed(() => {
   return Math.max(6, width / Math.max(1, (op.text?.length || 4) * 0.55) * 0.7)
 })
 
-function relativePosition(event: PointerEvent): { x: number; y: number } {
-  const rect = previewWrap.value!.getBoundingClientRect()
-  return { x: event.clientX - rect.left, y: event.clientY - rect.top }
-}
-
 let moveStart: { x: number; y: number; posX: number; posY: number } | null = null
 
+const drag = usePointerDrag(
+  (event) => {
+    if (!moveStart || !previewImg.value) return
+    const pos = relativePoint(event, previewWrap.value!)
+    const bounds = { width: previewImg.value.clientWidth, height: previewImg.value.clientHeight }
+    if (!bounds.width || !bounds.height) return
+    const dx = (pos.x - moveStart.x) / bounds.width
+    const dy = (pos.y - moveStart.y) / bounds.height
+    op.position_x = Math.min(1, Math.max(0, moveStart.posX + dx))
+    op.position_y = Math.min(1, Math.max(0, moveStart.posY + dy))
+  },
+  () => {
+    moveStart = null
+  },
+)
+
 function startMove(event: PointerEvent) {
-  const pos = relativePosition(event)
+  const pos = relativePoint(event, previewWrap.value!)
   moveStart = { x: pos.x, y: pos.y, posX: op.position_x, posY: op.position_y }
-  ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
-  window.addEventListener('pointermove', onMove)
-  window.addEventListener('pointerup', onMoveEnd)
-}
-
-function onMove(event: PointerEvent) {
-  if (!moveStart || !previewImg.value) return
-  const pos = relativePosition(event)
-  const bounds = { width: previewImg.value.clientWidth, height: previewImg.value.clientHeight }
-  if (!bounds.width || !bounds.height) return
-  const dx = (pos.x - moveStart.x) / bounds.width
-  const dy = (pos.y - moveStart.y) / bounds.height
-  op.position_x = Math.min(1, Math.max(0, moveStart.posX + dx))
-  op.position_y = Math.min(1, Math.max(0, moveStart.posY + dy))
-}
-
-function onMoveEnd() {
-  moveStart = null
-  window.removeEventListener('pointermove', onMove)
-  window.removeEventListener('pointerup', onMoveEnd)
+  drag.start(event)
 }
 </script>

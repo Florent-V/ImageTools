@@ -84,6 +84,9 @@ export function useProcessor() {
   }
 
   function clear() {
+    for (const item of queue.value) {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+    }
     queue.value = []
     progress.value = 0
   }

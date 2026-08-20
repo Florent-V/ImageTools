@@ -4,19 +4,22 @@ from app.errors import ImageError
 from app.schemas.operations import CropOp
 
 
-def apply(image: Image.Image, op: CropOp) -> Image.Image:
-    width, height = image.size
-    right = op.x + op.width
-    bottom = op.y + op.height
-
-    if right > width or bottom > height:
+def validate_bounds(x: int, y: int, width: int, height: int, source_width: int, source_height: int) -> None:
+    """Shared by the image op below and the video crop route — one rule, one place."""
+    right = x + width
+    bottom = y + height
+    if right > source_width or bottom > source_height:
         raise ImageError(
             "INVALID_OPERATION",
-            "The crop rectangle falls outside the image",
-            image_width=width,
-            image_height=height,
+            "The crop rectangle falls outside the source",
+            source_width=source_width,
+            source_height=source_height,
             requested_right=right,
             requested_bottom=bottom,
         )
 
-    return image.crop((op.x, op.y, right, bottom))
+
+def apply(image: Image.Image, op: CropOp) -> Image.Image:
+    width, height = image.size
+    validate_bounds(op.x, op.y, op.width, op.height, width, height)
+    return image.crop((op.x, op.y, op.x + op.width, op.y + op.height))

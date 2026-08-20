@@ -8,16 +8,17 @@
       @drop.prevent="onDrop"
       @click="fileInput?.click()"
     >
-      <UIcon name="i-lucide-upload-cloud" class="h-8 w-8 text-(--ui-text-muted)" />
+      <UIcon :name="icon" class="h-8 w-8 text-(--ui-text-muted)" />
       <p class="text-sm text-(--ui-text-muted)">
-        Glissez-déposez des images ici, ou
+        Glissez-déposez {{ label }} ici, ou
         <span class="font-medium text-(--ui-primary)">cliquez pour choisir un fichier</span>.
       </p>
+      <slot name="hint" />
       <input
         ref="fileInput"
         type="file"
-        accept="image/*"
-        multiple
+        :accept="accept"
+        :multiple="multiple"
         class="sr-only"
         @change="onPick"
       />
@@ -31,10 +32,22 @@
 <script setup lang="ts">
 import { normalizedExtension } from '~/utils/fileFormat'
 
-const props = defineProps<{
-  readFormats: string[]
-  maxFileSizeMb: number
-}>()
+const props = withDefaults(
+  defineProps<{
+    readFormats?: string[]
+    maxFileSizeMb?: number
+    multiple?: boolean
+    accept?: string
+    icon?: string
+    label?: string
+  }>(),
+  {
+    multiple: true,
+    accept: 'image/*',
+    icon: 'i-lucide-upload-cloud',
+    label: 'des images',
+  },
+)
 
 const emit = defineEmits<{ 'files-selected': [files: File[]] }>()
 
@@ -43,15 +56,16 @@ const rejected = ref<string[]>([])
 const fileInput = ref<HTMLInputElement>()
 
 function isAcceptable(file: File): boolean {
-  const withinSize = file.size <= props.maxFileSizeMb * 1024 * 1024
-  const knownFormat = props.readFormats.includes(normalizedExtension(file.name))
+  const withinSize = props.maxFileSizeMb === undefined || file.size <= props.maxFileSizeMb * 1024 * 1024
+  const knownFormat = props.readFormats === undefined || props.readFormats.includes(normalizedExtension(file.name))
   return withinSize && knownFormat
 }
 
 function filterFiles(files: FileList | File[]) {
+  const candidates = props.multiple ? Array.from(files) : Array.from(files).slice(0, 1)
   const accepted: File[] = []
   const badNames: string[] = []
-  for (const file of Array.from(files)) {
+  for (const file of candidates) {
     if (isAcceptable(file)) accepted.push(file)
     else badNames.push(file.name)
   }

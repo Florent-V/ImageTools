@@ -9,6 +9,8 @@ RUN pnpm run build
 FROM node:22-slim
 WORKDIR /app
 COPY --from=build /app/.output ./.output
+RUN chown -R node:node /app
+USER node
 ENV NITRO_PORT=3000
 ENV NITRO_HOST=0.0.0.0
 EXPOSE 3000

@@ -21,15 +21,12 @@
 </template>
 
 <script setup lang="ts">
-import { ApiError, fetchFormats, inspectImage, type InspectResponse, type OutputSpec, type RotateOp } from '~/utils/api'
+import type { OutputSpec, RotateOp } from '~/utils/api'
 
-const { data: formats } = await useAsyncData('formats', fetchFormats, { server: false })
-const { queue, enqueue, process } = useProcessor()
+const { formats, queue, enqueue, run: runProcess, running } = await useToolPage()
+const { inspected, inspectError, inspectFirst } = useFirstFileInspect()
 
 const rotateOp = ref<RotateOp>({ op: 'rotate', degrees: 0, flip_horizontal: false, flip_vertical: false })
-const inspected = ref<InspectResponse>()
-const inspectError = ref<string>()
-const running = ref(false)
 
 // Rotate only reorders pixels — output keeps the source format at max
 // quality, metadata untouched, no other transformation (no OutputForm here).
@@ -43,21 +40,11 @@ const output = computed<OutputSpec>(() => {
 async function onFilesSelected(files: File[]) {
   enqueue(files)
   if (!inspected.value && files[0]) {
-    inspectError.value = undefined
-    try {
-      inspected.value = await inspectImage(files[0])
-    } catch (err) {
-      inspectError.value = err instanceof ApiError ? err.message : "Impossible d'analyser cette image."
-    }
+    await inspectFirst(files[0])
   }
 }
 
 async function run() {
-  running.value = true
-  try {
-    await process({ ops: [rotateOp.value], output: output.value })
-  } finally {
-    running.value = false
-  }
+  await runProcess({ ops: [rotateOp.value], output: output.value })
 }
 </script>

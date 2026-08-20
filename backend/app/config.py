@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     max_video_file_size_mb: int = 200
     max_video_duration_s: int = 60
     video_timeout_s: int = 180
+    # Caps simultaneous ffmpeg/Pillow work across all endpoints — the process
+    # itself has no auth, so this is what stops a handful of concurrent
+    # requests from exhausting worker CPU/RAM.
+    max_concurrent_jobs: int = 4
 
     model_config = {"env_prefix": "IMGCONV_"}
 

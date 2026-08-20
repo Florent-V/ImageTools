@@ -7,26 +7,13 @@
       </p>
     </div>
 
-    <div>
-      <div
-        class="flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-10 text-center transition-colors cursor-pointer"
-        :class="isOver ? 'border-(--ui-primary) bg-(--ui-primary)/5' : 'border-(--ui-border) hover:border-(--ui-primary)/50'"
-        @dragover.prevent="isOver = true"
-        @dragleave.prevent="isOver = false"
-        @drop.prevent="onDrop"
-        @click="fileInput?.click()"
-      >
-        <UIcon name="i-lucide-file-video" class="h-8 w-8 text-(--ui-text-muted)" />
-        <p class="text-sm text-(--ui-text-muted)">
-          Glissez-déposez une vidéo ici, ou
-          <span class="font-medium text-(--ui-primary)">cliquez pour choisir un fichier</span>.
-        </p>
+    <DropZone accept="video/*" :multiple="false" icon="i-lucide-file-video" label="une vidéo" @files-selected="onFilesSelected">
+      <template #hint>
         <p v-if="limits" class="text-xs text-(--ui-text-muted)">
           Limite : {{ limits.max_duration_s }}s, {{ limits.max_file_size_mb }} Mo.
         </p>
-        <input ref="fileInput" type="file" accept="video/*" class="sr-only" @change="onFilePicked" />
-      </div>
-    </div>
+      </template>
+    </DropZone>
 
     <UAlert v-if="inspectError" color="error" variant="soft" icon="i-lucide-triangle-alert" :title="inspectError" />
 
@@ -143,8 +130,6 @@ const QUALITY_DESCRIPTIONS: Record<VideoQuality, string> = {
 const { data: limits } = await useAsyncData('video-limits', fetchVideoLimits, { server: false })
 const { data: presets } = await useAsyncData('video-presets', fetchVideoPresets, { server: false })
 
-const fileInput = ref<HTMLInputElement>()
-const isOver = ref(false)
 const file = ref<File>()
 const previewSrc = ref<string>()
 const inspected = ref<VideoInspectResponse>()
@@ -215,16 +200,8 @@ async function loadFile(picked: File) {
   }
 }
 
-function onFilePicked(event: Event) {
-  const input = event.target as HTMLInputElement
-  const picked = input.files?.[0]
-  input.value = ''
-  if (picked) loadFile(picked)
-}
-
-function onDrop(event: DragEvent) {
-  isOver.value = false
-  const picked = event.dataTransfer?.files[0]
+function onFilesSelected(files: File[]) {
+  const picked = files[0]
   if (picked) loadFile(picked)
 }
 

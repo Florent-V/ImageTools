@@ -5,6 +5,16 @@ from pydantic import BaseModel, Field, model_validator
 MAX_DIMENSION = 100_000
 
 
+class Rect(BaseModel):
+    """x/y/width/height, bounded — shared by every op or request that carries
+    a crop rectangle (image, video, PWA), so the bound can't drift per-domain."""
+
+    x: int = Field(ge=0, le=MAX_DIMENSION)
+    y: int = Field(ge=0, le=MAX_DIMENSION)
+    width: int = Field(gt=0, le=MAX_DIMENSION)
+    height: int = Field(gt=0, le=MAX_DIMENSION)
+
+
 class ResizeOp(BaseModel):
     op: Literal["resize"]
     width: int | None = Field(default=None, gt=0, le=MAX_DIMENSION)
@@ -24,12 +34,8 @@ class ResizeOp(BaseModel):
         return self
 
 
-class CropOp(BaseModel):
+class CropOp(Rect):
     op: Literal["crop"]
-    x: int = Field(ge=0, le=MAX_DIMENSION)
-    y: int = Field(ge=0, le=MAX_DIMENSION)
-    width: int = Field(gt=0, le=MAX_DIMENSION)
-    height: int = Field(gt=0, le=MAX_DIMENSION)
 
 
 class RotateOp(BaseModel):
