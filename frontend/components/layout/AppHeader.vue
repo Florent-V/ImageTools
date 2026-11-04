@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const mobileNavOpen = ref(false)
+const { user, logout } = useUser()
 </script>
 
 <template>
@@ -21,7 +22,18 @@ const mobileNavOpen = ref(false)
       </div>
 
       <div class="flex items-center gap-1">
+        <span v-if="user" class="hidden sm:inline text-sm text-(--ui-text-muted) mr-2">
+          {{ user.name || user.email }}
+        </span>
         <UColorModeButton />
+        <UButton
+          v-if="user"
+          icon="i-lucide-log-out"
+          color="neutral"
+          variant="ghost"
+          aria-label="Se déconnecter"
+          @click="logout"
+        />
       </div>
     </div>
 

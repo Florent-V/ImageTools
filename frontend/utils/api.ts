@@ -113,12 +113,22 @@ async function throwApiError(response: Response): Promise<never> {
   }
 }
 
-function apiUrl(path: string): string {
-  return `${useRuntimeConfig().public.apiBaseUrl}${path}`
+// Same-origin /api/** calls, authenticated by the session cookie. A 401 means
+// the session is gone (expired, revoked, access removed): send the user back
+// through the OAuth server, then to this page.
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(path, init)
+  if (response.status === 401) {
+    redirectToLogin(window.location.pathname + window.location.search)
+    throw new ApiError({
+      error: { code: 'UNAUTHENTICATED', message: 'Session expirée, reconnexion…', detail: {} },
+    })
+  }
+  return response
 }
 
 export async function fetchFormats(): Promise<FormatsResponse> {
-  const response = await fetch(apiUrl('/api/formats'))
+  const response = await apiFetch('/api/formats')
   if (!response.ok) return throwApiError(response)
   return response.json()
 }
@@ -126,7 +136,7 @@ export async function fetchFormats(): Promise<FormatsResponse> {
 export async function inspectImage(file: File): Promise<InspectResponse> {
   const body = new FormData()
   body.append('file', file)
-  const response = await fetch(apiUrl('/api/inspect'), { method: 'POST', body })
+  const response = await apiFetch('/api/inspect', { method: 'POST', body })
   if (!response.ok) return throwApiError(response)
   return response.json()
 }
@@ -140,7 +150,7 @@ export async function processImage(
   body.append('file', file)
   body.append('request', JSON.stringify(request))
   if (watermarkFile) body.append('watermark_file', watermarkFile)
-  const response = await fetch(apiUrl('/api/process'), { method: 'POST', body })
+  const response = await apiFetch('/api/process', { method: 'POST', body })
   if (!response.ok) return throwApiError(response)
   const blob = await response.blob()
   return {
@@ -194,7 +204,7 @@ export async function generatePwaKit(file: File, request: PwaGenerateRequest): P
   const body = new FormData()
   body.append('file', file)
   body.append('request', JSON.stringify(request))
-  const response = await fetch(apiUrl('/api/pwa/generate'), { method: 'POST', body })
+  const response = await apiFetch('/api/pwa/generate', { method: 'POST', body })
   if (!response.ok) return throwApiError(response)
   const blob = await response.blob()
   return { blob, fileCount: Number(response.headers.get('X-File-Count') ?? 0) }
@@ -272,13 +282,13 @@ export interface VideoProcessResult {
 }
 
 export async function fetchVideoLimits(): Promise<VideoLimits> {
-  const response = await fetch(apiUrl('/api/video/limits'))
+  const response = await apiFetch('/api/video/limits')
   if (!response.ok) return throwApiError(response)
   return response.json()
 }
 
 export async function fetchVideoPresets(): Promise<VideoPresetsResponse> {
-  const response = await fetch(apiUrl('/api/video/presets'))
+  const response = await apiFetch('/api/video/presets')
   if (!response.ok) return throwApiError(response)
   return response.json()
 }
@@ -287,7 +297,7 @@ export async function fetchVideoFrame(file: File, timestampS: number): Promise<{
   const body = new FormData()
   body.append('file', file)
   body.append('timestamp_s', String(timestampS))
-  const response = await fetch(apiUrl('/api/video/frame'), { method: 'POST', body })
+  const response = await apiFetch('/api/video/frame', { method: 'POST', body })
   if (!response.ok) return throwApiError(response)
   return response.json()
 }
@@ -295,7 +305,7 @@ export async function fetchVideoFrame(file: File, timestampS: number): Promise<{
 export async function inspectVideo(file: File): Promise<VideoInspectResponse> {
   const body = new FormData()
   body.append('file', file)
-  const response = await fetch(apiUrl('/api/video/inspect'), { method: 'POST', body })
+  const response = await apiFetch('/api/video/inspect', { method: 'POST', body })
   if (!response.ok) return throwApiError(response)
   return response.json()
 }
@@ -304,7 +314,7 @@ export async function processVideo(file: File, request: VideoProcessRequest): Pr
   const body = new FormData()
   body.append('file', file)
   body.append('request', JSON.stringify(request))
-  const response = await fetch(apiUrl('/api/video/process'), { method: 'POST', body })
+  const response = await apiFetch('/api/video/process', { method: 'POST', body })
   if (!response.ok) return throwApiError(response)
   const blob = await response.blob()
   return {

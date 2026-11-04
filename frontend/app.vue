@@ -15,6 +15,11 @@ useSeoMeta({
   ogDescription: description,
   twitterCard: 'summary_large_image',
 })
+
+// Set by the backend after a failed login (/?auth_error=<code>)
+const route = useRoute()
+const { user } = useUser()
+const authError = computed(() => (user.value ? null : (route.query.auth_error as string | undefined) ?? null))
 </script>
 
 <template>
@@ -24,7 +29,14 @@ useSeoMeta({
     <div class="flex items-start min-h-[calc(100vh-64px)]">
       <AppSidebar class="hidden md:block" />
       <UMain class="flex-1 p-4 md:p-8">
-        <NuxtPage />
+        <div v-if="authError" class="max-w-md mx-auto py-16 text-center space-y-4">
+          <h1 class="text-2xl font-bold">Connexion impossible</h1>
+          <p class="text-(--ui-text-muted)">
+            {{ authError === 'access_denied' ? 'Votre compte n’a pas accès à cette application.' : 'Le serveur d’authentification a refusé ou échoué la connexion.' }}
+          </p>
+          <UButton href="/auth/login" external>Réessayer</UButton>
+        </div>
+        <NuxtPage v-else />
       </UMain>
     </div>
 
