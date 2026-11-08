@@ -26,7 +26,7 @@
 
       <UInput v-if="op.mode === 'text'" v-model="textValue" placeholder="Texte du filigrane" />
       <div v-else class="flex flex-col gap-2">
-        <input ref="markInput" type="file" accept="image/*" class="sr-only" @change="onMarkPicked" />
+        <input ref="markInput" type="file" accept="image/*" class="sr-only" @change="onMarkPicked" >
         <UButton size="sm" variant="outline" icon="i-lucide-image-plus" @click="markInput?.click()">
           {{ markFile ? markFile.name : 'Choisir une image' }}
         </UButton>
@@ -36,7 +36,7 @@
         ref="previewWrap"
         :class="[PREVIEW_WRAP_CLASS, markReady ? 'cursor-move' : 'cursor-default']"
       >
-        <img :src="previewSrc" ref="previewImg" :class="PREVIEW_IMG_CLASS" draggable="false" @load="onImageLoad" />
+        <img ref="previewImg" :src="previewSrc" :class="PREVIEW_IMG_CLASS" draggable="false" @load="onImageLoad" >
         <div v-if="op.white_veil" class="absolute inset-0 rounded-md bg-white pointer-events-none" :style="{ opacity: op.veil_opacity }" />
         <div
           v-if="markReady"
@@ -44,7 +44,7 @@
           :style="markStyle"
           @pointerdown="startMove"
         >
-          <img v-if="op.mode === 'image' && markPreviewSrc" :src="markPreviewSrc" class="h-full w-full object-contain" draggable="false" />
+          <img v-if="op.mode === 'image' && markPreviewSrc" :src="markPreviewSrc" class="h-full w-full object-contain" draggable="false" >
           <span v-else class="whitespace-nowrap font-bold text-black" :style="{ fontSize: `${textFontSizePx}px` }">
             {{ op.text || 'Texte' }}
           </span>

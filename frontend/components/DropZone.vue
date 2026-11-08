@@ -21,7 +21,7 @@
         :multiple="multiple"
         class="sr-only"
         @change="onPick"
-      />
+      >
     </div>
     <p v-if="rejected.length" class="mt-2 text-sm text-(--ui-error)">
       Rejeté : {{ rejected.join(', ') }}
@@ -42,6 +42,8 @@ const props = withDefaults(
     label?: string
   }>(),
   {
+    readFormats: undefined,
+    maxFileSizeMb: undefined,
     multiple: true,
     accept: 'image/*',
     icon: 'i-lucide-upload-cloud',

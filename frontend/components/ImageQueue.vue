@@ -23,7 +23,7 @@
             :src="entry.item.previewUrl"
             class="h-full w-full object-cover"
             alt=""
-          />
+          >
           <div v-else class="flex h-full w-full items-center justify-center">
             <UIcon name="i-lucide-image" class="h-6 w-6 text-(--ui-text-muted)" />
           </div>

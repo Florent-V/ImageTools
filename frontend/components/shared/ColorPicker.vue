@@ -6,7 +6,7 @@
       :value="modelValue"
       class="h-8 w-8 cursor-pointer rounded-md border border-(--ui-border) bg-transparent p-0.5"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-    />
+    >
   </div>
 </template>
 

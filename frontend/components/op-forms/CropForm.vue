@@ -23,7 +23,7 @@
         :class="[PREVIEW_WRAP_CLASS, box.selection.value ? 'cursor-default' : 'cursor-crosshair']"
         @pointerdown="box.onBackgroundPointerDown"
       >
-        <img :src="previewSrc" ref="previewImg" :class="PREVIEW_IMG_CLASS" @load="onImageLoad" draggable="false" />
+        <img ref="previewImg" :src="previewSrc" :class="PREVIEW_IMG_CLASS" draggable="false" @load="onImageLoad" >
         <div
           v-if="box.selection.value"
           class="absolute border-2 border-(--ui-primary) bg-(--ui-primary)/15 cursor-move"

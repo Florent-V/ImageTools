@@ -1,3 +1,12 @@
 allowBuilds:
   esbuild: true
   vue-demi: true
+
+# @nuxt/ui declares Tiptap only as an optional peer ("^3"), so pnpm kept the
+# first resolution (3.30.0, GHSA ReDoS fixed in 3.30.5). Not used by the app
+# itself. Remove once the lockfile resolves >=3.30.5 without it.
+overrides:
+  "@tiptap/core": "^3.31.4"
+  "@tiptap/pm": "^3.31.4"
+  # Same optional-peer cycle (prosemirror-state <-> prosemirror-view), fixed in 1.42.3.
+  "prosemirror-view": "^1.42.3"

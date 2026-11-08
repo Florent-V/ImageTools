@@ -2,7 +2,7 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-07-30',
   devtools: { enabled: false },
   telemetry: false,
-  modules: ['@nuxt/ui'],
+  modules: ['@nuxt/ui', '@nuxt/eslint'],
   css: ['~/assets/css/main.css'],
   components: [
     { path: '~/components/layout', pathPrefix: false },

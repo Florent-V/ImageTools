@@ -19,7 +19,7 @@
         :class="[PREVIEW_WRAP_CLASS, mode === 'draw' ? 'cursor-crosshair' : 'cursor-default']"
         @pointerdown="onWrapPointerDown"
       >
-        <img :src="previewSrc" ref="previewImg" :class="PREVIEW_IMG_CLASS" draggable="false" @load="onImageLoad" />
+        <img ref="previewImg" :src="previewSrc" :class="PREVIEW_IMG_CLASS" draggable="false" @load="onImageLoad" >
         <canvas ref="drawCanvas" class="absolute inset-0 h-full w-full" :class="mode === 'draw' ? '' : 'pointer-events-none'" />
         <div
           v-for="block in textBlocks"

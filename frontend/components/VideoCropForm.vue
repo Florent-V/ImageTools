@@ -23,7 +23,7 @@
         :class="[PREVIEW_WRAP_CLASS, box.selection.value ? 'cursor-default' : 'cursor-crosshair']"
         @pointerdown="box.onBackgroundPointerDown"
       >
-        <img :src="currentPreviewSrc" ref="previewImg" :class="PREVIEW_IMG_CLASS" @load="onImageLoad" draggable="false" />
+        <img ref="previewImg" :src="currentPreviewSrc" :class="PREVIEW_IMG_CLASS" draggable="false" @load="onImageLoad" >
         <div
           v-if="box.selection.value"
           class="absolute border-2 border-(--ui-primary) bg-(--ui-primary)/15 cursor-move"
@@ -55,7 +55,7 @@
             step="0.1"
             class="w-full"
             @input="onScrub"
-          />
+          >
           <span class="w-12 shrink-0 text-right text-xs text-(--ui-text-muted)">{{ scrubTimestamp.toFixed(1) }}s</span>
         </div>
       </UFormField>

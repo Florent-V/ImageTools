@@ -78,12 +78,12 @@
 </template>
 
 <script setup lang="ts">
-import {
-  type CropOp,
-  type Operation,
-  type OutputSpec,
-  type ResizeOp,
-  type RotateOp,
+import type {
+  CropOp,
+  Operation,
+  OutputSpec,
+  ResizeOp,
+  RotateOp,
 } from '~/utils/api'
 import { detectWritableFormat } from '~/utils/fileFormat'
 import type { QueueItem } from '~/composables/useProcessor'
