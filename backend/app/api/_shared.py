@@ -50,5 +50,5 @@ async def run_with_timeout(fn, *args, timeout_s: float):
     """
     try:
         return await asyncio.wait_for(run_in_threadpool(fn, *args), timeout=timeout_s)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise ImageError("PROCESSING_FAILED", f"Processing exceeded the {timeout_s}s limit")

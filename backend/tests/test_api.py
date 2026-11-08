@@ -133,8 +133,8 @@ def test_a_processing_timeout_is_reported_within_the_error_contract(client, monk
     # error code, not a hung request or a raw 500.
     import time
 
-    from app.config import settings
     from app.api import routes
+    from app.config import settings
 
     monkeypatch.setattr(settings, "request_timeout_s", 0.05)
     monkeypatch.setattr(routes, "process", lambda data, req, watermark_data=None: time.sleep(1))

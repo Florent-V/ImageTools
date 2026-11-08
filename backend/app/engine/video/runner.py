@@ -14,7 +14,7 @@ async def run_ffmpeg(cmd: list[str], timeout_s: float) -> bytes:
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         process.kill()
         await process.wait()
         raise FfmpegError(f"command timed out after {timeout_s}s: {' '.join(cmd)}")

@@ -3,17 +3,17 @@ from io import BytesIO
 
 from PIL import Image
 
+from app.engine.pwa.ios_splash import SplashSpec
 from app.engine.pwa.render import (
+    _render_icon,
+    _render_splash,
     browserconfig_xml,
     favicon_ico_bytes,
     manifest_dict,
     png_bytes,
     snippet_html,
-    _render_icon,
-    _render_splash,
 )
 from app.engine.pwa.specs import IconSpec
-from app.engine.pwa.ios_splash import SplashSpec
 from app.schemas.pwa import PwaGenerateRequest
 
 
