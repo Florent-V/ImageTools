@@ -1,12 +1,82 @@
+# Base stack = production-like: built images, no source mounts, nothing published.
+#   - dev:  `make dev` also loads docker-compose.override.yml (hot reload)
+#   - prod: `make prod-up` adds docker-compose.prod.yml (web on 127.0.0.1)
+# Same layout, same service names (api, web) and same variables as the pdf-tools repo.
+name: imagetools
+
 services:
-  backend:
+  api:
     build: ./backend
+    image: imagetools-api:${IMAGE_TAG:-latest}
+    # Not published: reachable only through the web container (Caddy) and,
+    # for the back-channel logout, through the public URL.
+    expose:
+      - "8000"
     environment:
+      # App-specific
       IMGCONV_MAX_FILE_SIZE_MB: ${MAX_UPLOAD_MB:-50}
       IMGCONV_MAX_MEGAPIXELS: 100
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      # Common to every app
+      OAUTH_ISSUER: ${OAUTH_ISSUER}
+      OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID}
+      OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN}
+      APP_ENV: ${APP_ENV:-prod}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-}
+      SESSION_DB_PATH: /data/sessions.db
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      # The only way in is the web container: nothing else can forge these headers
+      # (to tighten later: see docs/ameliorations-a-prevoir.md)
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      # Sessions database: kept across restarts so sessions (and the replay
+      # protection of logout tokens) survive a redeploy
+      - api-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # 503 until the OAuth server metadata is loaded
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     restart: unless-stopped
 
-  frontend:
+  web:
     build: ./frontend
+    image: imagetools-web:${IMAGE_TAG:-latest}
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  api-data:

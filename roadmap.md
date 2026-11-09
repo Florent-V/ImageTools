@@ -9,7 +9,7 @@ Référence : [`docs/superpowers/specs/2026-07-24-image-converter-design.md`](do
 Découvertes lors de l'analyse spec/plan, non couvertes par v2/v3/v4 ci-dessous.
 
 - [ ] **Support HEIC en lecture** — absent de v1 et de tout le roadmap v2-v4. Format par défaut des photos iPhone ; gap pratique majeur pour un usage mobile réel.
-- [ ] **Authentification avant exposition prod-remote** — le profil `prod-remote` route déjà vers un Caddy externe, mais `basic_auth`/HTTPS restent "phase 2, non construits" (design §9). Ne pas exposer `prod-remote` sur Internet sans ça.
+- [x] **Authentification avant exposition en production** — serveur OAuth maison (FastAPI client OAuth/BFF, sessions SQLite, front statique servi par Caddy), HTTPS par le Caddy global. Voir [`docs/deploiement.md`](docs/deploiement.md).
 - [ ] **Confirmer le choix "pas de persistance / pas de reprise de lot"** — décision assumée pour la confidentialité (design §2, §4), mais divergence UX notable avec iLoveIMG. À valider que c'est toujours voulu avant d'aller plus loin.
 
 ## v2 — extensions du même moteur Pillow
@@ -19,7 +19,7 @@ Découvertes lors de l'analyse spec/plan, non couvertes par v2/v3/v4 ci-dessous.
 - [ ] Amélioration qualité sans IA (niveaux auto, balance des blancs, netteté, réduction de bruit, contraste)
 - [ ] Images vers PDF (`img2pdf`, sans réencodage)
 - [ ] GIF animé depuis plusieurs images
-- [ ] Authentification et HTTPS (Caddy) — recoupe le point priorité haute ci-dessus
+- [x] Authentification et HTTPS (Caddy) — fait, voir ci-dessus
 
 ## Vidéo — moteur ffmpeg
 
@@ -50,6 +50,5 @@ Synchrone (vidéos ≤60s/200 Mo), pas de file d'attente.
 ## Écarté (décision assumée, pas un oubli)
 
 - HTML vers image — nécessite navigateur headless (Playwright, +400 Mo), hors sujet traitement d'images locales
-- mDNS / nom de domaine local — IP + port LAN suffit
-- TLS en prod-home — réseau LAN de confiance
+- Profil LAN sans authentification (`prod-home`) — supprimé : l'application passe toujours par le serveur OAuth
 - Pinia, internationalisation — pas de besoin identifié en v1

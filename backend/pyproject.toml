@@ -8,7 +8,10 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "python-multipart>=0.0.12",
-    "pillow>=11.3",
+    "pillow>=13.0",
+    "pyjwt[crypto]>=2.10",
+    "authlib>=1.9.1",
+    "httpx>=0.28.1",
 ]
 
 [dependency-groups]
@@ -16,6 +19,7 @@ dev = [
     "pytest>=8.3",
     "httpx>=0.27",
     "piexif>=1.1.3",
+    "ruff>=0.17.3",
 ]
 
 [tool.pytest.ini_options]
@@ -24,3 +28,19 @@ pythonpath = ["."]
 
 [tool.uv]
 package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+# E501: no formatter enforced. B008: FastAPI Depends()/File()/Form() idiom.
+# B904 (19 sites) and UP047: pre-existing style, to clean up separately.
+ignore = ["E501", "B008", "B904", "UP047"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S603", "S607", "S608", "B017"]
+# app/auth and tests/auth are shared verbatim with pdf-tools (reference), which does not lint with S/I.
+"app/auth/**" = ["S106", "S608"]
+"tests/auth/**" = ["I001"]

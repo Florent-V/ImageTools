@@ -1,6 +1,6 @@
 import json
-from zipfile import ZipFile
 from io import BytesIO
+from zipfile import ZipFile
 
 from PIL import Image
 

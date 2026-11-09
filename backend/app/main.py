@@ -1,14 +1,14 @@
 import logging
-import os
 import time
 
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
-from app.api.routes import router
 from app.api.pwa_routes import router as pwa_router
+from app.api.routes import router
 from app.api.video_routes import router as video_router
+from app.auth import setup_auth
+from app.auth.config import AuthSettings
 from app.errors import ImageError
 
 logging.basicConfig(
@@ -19,21 +19,12 @@ logger = logging.getLogger("imagetools")
 
 app = FastAPI(title="ImageTools", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
-# Only needed when the browser reaches this API on a different origin than
-# the frontend it's served from (e.g. prod-remote's direct-port access).
-# Same-origin setups (dev proxy, prod-home/prod-remote behind Caddy) never
-# trigger a CORS check, so this is a no-op for them.
-_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(router)
-app.include_router(pwa_router)
-app.include_router(video_router)
+# This backend is the OAuth client (BFF): server-side sessions, opaque cookie.
+# The middleware answers 401 before any upload body is read and exposes the
+# user as request.state.user. Same origin as the front (behind Caddy): no CORS.
+auth = setup_auth(app, AuthSettings(), protected_prefixes=("/api",), public_paths=("/api/health",))
+for _router in (router, pwa_router, video_router):
+    app.include_router(_router)
 
 
 @app.middleware("http")
@@ -81,5 +72,8 @@ async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResp
 
 
 @app.get("/api/health")
-async def health() -> dict:
-    return {"status": "ok"}
+async def health() -> Response:
+    # 503 until the OAuth server metadata is loaded: not ready to log anyone in
+    if not auth.discovery.ready:
+        return JSONResponse({"status": "starting"}, status_code=503)
+    return JSONResponse({"status": "ok"})

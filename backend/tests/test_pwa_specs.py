@@ -1,7 +1,7 @@
 from app.engine.pwa.ios_splash import IOS_SPLASH_SCREENS
 from app.engine.pwa.specs import (
-    ANDROID_ICONS,
     ANDROID_ICON_SIZES,
+    ANDROID_ICONS,
     APPLE_ICONS,
     FAVICON_ICO_SIZES,
     FAVICON_PNG_SIZES,

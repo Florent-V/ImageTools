@@ -59,7 +59,11 @@ def _prepare_mode(image: Image.Image, fmt: str) -> Image.Image:
         has_alpha = "A" in image.getbands() or "transparency" in image.info
         return image.convert("RGBA" if has_alpha else "RGB")
 
-    return image  # PNG handles every mode we can produce
+    if image.mode == "I":
+        # Pillow 13 no longer clips 32-bit "I" to PNG's 16-bit channel on save.
+        return image.convert("I;16")
+
+    return image  # PNG handles every other mode we can produce
 
 
 def _save_options(fmt: str, quality: int) -> dict:

@@ -8,3 +8,8 @@ node_modules/
 .nuxt/
 .output/
 .worktrees/
+.env.*
+!.env.example
+.claude/
+frontend/.pnpm-store/
+docs/superpowers/

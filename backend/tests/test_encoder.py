@@ -106,3 +106,13 @@ def test_rgb_icc_still_survives_the_alpha_flatten_to_jpeg():
     data = encode(decoded.image, "jpeg", 85, decoded.icc_profile, exif=None)
 
     assert Image.open(BytesIO(data)).info.get("icc_profile") == factories.ICC_BYTES
+
+
+def test_32_bit_grayscale_encodes_to_png_with_values_clipped_to_16_bit():
+    # Pillow 13 stopped clipping mode "I" itself and refuses to write it as PNG.
+    source = Image.new("I", (2, 2), 70000)
+
+    result = Image.open(BytesIO(encode(source, "png", 80, None, None)))
+
+    assert result.mode == "I;16"
+    assert result.getpixel((0, 0)) == 65535
