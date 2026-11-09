@@ -17,7 +17,7 @@ commandes `make` du dépôt (`make help` les liste). Pour le contexte (architect
 ## 1. Ce que vous mettez en place
 
 ```
-Internet ─▶ Caddy global (HTTPS, HSTS) ─▶ 127.0.0.1:3010 ─▶ conteneur web (Caddy : statique, /api, /auth)
+Internet ─▶ Caddy global (HTTPS, HSTS) ─▶ 127.0.0.1:3011 ─▶ conteneur web (Caddy : statique, /api, /auth)
                                                                   └─▶ conteneur api (FastAPI, client OAuth)
                                                                          └─ volume api-data : sessions SQLite
 Serveur OAuth (https://oauth.<domaine>) ◀── découverte, code + PKCE, refresh ── api
@@ -83,7 +83,7 @@ cp .env.example .env && chmod 600 .env
 Renseignez (le fichier est ignoré par git et ne doit jamais être commité) :
 
 ```dotenv
-REMOTE_FRONTEND_PORT=3010
+REMOTE_FRONTEND_PORT=3011
 MAX_UPLOAD_MB=50
 OAUTH_ISSUER=https://oauth.<domaine>
 OAUTH_CLIENT_ID=<client_id>
@@ -113,7 +113,7 @@ make prod-build prod-up
 réussie. Si la commande échoue, voir [§9](#9-dépannage-en-production) et `make prod-logs`.
 
 ```bash
-make prod-ps        # api sans port publié ; web sur 127.0.0.1:3010
+make prod-ps        # api sans port publié ; web sur 127.0.0.1:3011
 ```
 
 ## 5. Brancher le Caddy global
@@ -122,7 +122,7 @@ Dans le `Caddyfile` du serveur :
 
 ```caddyfile
 imagetools.<domaine> {
-	reverse_proxy 127.0.0.1:3010
+	reverse_proxy 127.0.0.1:3011
 }
 ```
 
@@ -150,7 +150,7 @@ Puis dans un navigateur :
 | Ouvrir `https://imagetools.<domaine>/crop` | Redirection vers le serveur OAuth, connexion (et 2FA), retour sur `/crop` |
 | Outils de développement → cookies | Un seul cookie `__Host-session`, `HttpOnly` et `Secure` ; aucun jeton |
 | Convertir une image, traiter une vidéo | Fonctionne |
-| Bouton de déconnexion | Page `/logged-out` ; retour sur l'app = reconnexion (SSO) |
+| Bouton de déconnexion | Déconnexion globale (app et SSO) : retour sur l'écran de connexion du serveur OAuth |
 
 Test du back-channel logout, sur le serveur OAuth :
 

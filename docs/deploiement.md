@@ -30,7 +30,7 @@ api ──découverte, code + PKCE, refresh──▶ serveur OAuth       serveur
 
 | Service | Dev (`make dev`) | Production (`make prod-up`) |
 |---|---|---|
-| Front ImageTools | **http://localhost:3001** (`FRONTEND_PORT`, Nuxt dev, proxy `/api` et `/auth`) | `127.0.0.1:3010` (`REMOTE_FRONTEND_PORT`, conteneur Caddy), derrière le Caddy global |
+| Front ImageTools | **http://localhost:3001** (`FRONTEND_PORT`, Nuxt dev, proxy `/api` et `/auth`) | `127.0.0.1:3011` (`REMOTE_FRONTEND_PORT`, conteneur Caddy), derrière le Caddy global |
 | API ImageTools | `8000` (réseau hôte, derrière le proxy de Nuxt) | réseau Docker interne uniquement |
 | Serveur OAuth local | http://localhost:8080 | `https://oauth.<domaine>` |
 | Mailpit (codes MFA en dev) | http://localhost:8025 | — |
@@ -83,7 +83,7 @@ FRONTEND_PORT=3001
 OAUTH_ISSUER=http://localhost:8080        # valeur EXACTE de l'issuer publié par le serveur OAuth
 OAUTH_CLIENT_ID=<client_id>
 OAUTH_CLIENT_SECRET=<client_secret>
-PUBLIC_ORIGIN=http://localhost:3001       # le redirect URI en est déduit : {PUBLIC_ORIGIN}/auth/callback
+BACKEND_PORT=8000                         # PUBLIC_ORIGIN est déduit de FRONTEND_PORT par docker-compose.override.yml
 ```
 
 En dev, l'API tourne en réseau hôte : l'issuer `http://localhost:8080` doit être joignable sous ce nom exact (il est
@@ -112,7 +112,7 @@ http://localhost:8025), puis retour sur ImageTools, connecté.
 | Outils du navigateur : cookies, réponses | Un seul cookie `imagetools-session` opaque (HttpOnly) ; aucun jeton, aucun secret |
 | `make console c="app:application:test-backchannel-logout <client_id> vous@example.com"` (dans `OAuth-serveur`) | « HTTP 200 » ; ImageTools vous renvoie à la connexion à la requête suivante |
 | Retirer l'accès à l'application dans l'admin | Session fermée à la requête suivante |
-| Bouton de déconnexion (en haut à droite) | Page `/logged-out` (le serveur OAuth ne publie pas d'`end_session_endpoint`) ; sa session SSO reste ouverte |
+| Bouton de déconnexion (en haut à droite) | Déconnexion globale : session de l'app et session SSO fermées (`{OAUTH_ISSUER}/logout?redirect_uri=…`), retour sur l'écran de connexion du serveur OAuth |
 | Mettre `OAUTH_ACCESS_TOKEN_TTL=PT1M` dans le serveur OAuth et naviguer plus d'une minute | Toujours connecté (renouvellement silencieux, toutes les 15 min au plus) |
 
 ## 3. Premier déploiement en production
@@ -152,7 +152,7 @@ cp .env.example .env && chmod 600 .env
 Dans `.env` :
 
 ```dotenv
-REMOTE_FRONTEND_PORT=3010
+REMOTE_FRONTEND_PORT=3011
 MAX_UPLOAD_MB=50
 OAUTH_ISSUER=https://oauth.<domaine>      # exactement l'issuer publié, barre finale comprise s'il y en a une
 OAUTH_CLIENT_ID=<client_id>
@@ -177,7 +177,7 @@ Dans le `Caddyfile` global du serveur :
 
 ```caddyfile
 imagetools.<domaine> {
-	reverse_proxy 127.0.0.1:3010
+	reverse_proxy 127.0.0.1:3011
 }
 ```
 
@@ -189,7 +189,7 @@ installation).
 1. https://imagetools.<domaine> → connexion sur le serveur OAuth → retour sur ImageTools.
 2. Sur le serveur OAuth : `make prod-console c="app:application:test-backchannel-logout <client_id> vous@<domaine>"`
    → « HTTP 200 ».
-3. `make prod-ps` : `api` sans port publié, `web` sur `127.0.0.1:3010`.
+3. `make prod-ps` : `api` sans port publié, `web` sur `127.0.0.1:3011`.
 
 ## 4. Mise à jour de la production
 

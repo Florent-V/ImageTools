@@ -1,4 +1,7 @@
+# Production overlay (`make prod-up`): docker-compose.yml + this file, never the
+# dev override. `web` is the only reachable container, on 127.0.0.1: the host's
+# Caddy does the HTTPS. `api` publishes no port.
 services:
   web:
     ports:
-      - "127.0.0.1:${REMOTE_FRONTEND_PORT:-3010}:8080"
+      - "${HTTP_BIND:-127.0.0.1}:${REMOTE_FRONTEND_PORT:-3011}:8080"
