@@ -10,7 +10,7 @@ dependencies = [
     "python-multipart>=0.0.12",
     "pillow>=13.0",
     "pyjwt[crypto]>=2.10",
-    "authlib>=1.9.1",
+    "authlib>=1.9.2",
     "httpx>=0.28.1",
 ]
 
