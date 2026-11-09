@@ -6,7 +6,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm run generate
 
-# Static files only: no Node at runtime
+# Static files only: no Node at runtime. The dev stack stops at the `build` stage.
 FROM caddy:2-alpine
 COPY Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /app/.output/public /srv

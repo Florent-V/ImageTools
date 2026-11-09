@@ -1,0 +1,4 @@
+services:
+  web:
+    ports:
+      - "127.0.0.1:${REMOTE_FRONTEND_PORT:-3010}:8080"

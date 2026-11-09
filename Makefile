@@ -1,77 +1,88 @@
-.PHONY: help up down restart logs ps build rebuild dev install test lint audit clean up-home down-home logs-home up-remote down-remote logs-remote
-
 BACKEND_DIR := backend
+DEV_COMP    := docker compose
+PROD_COMP   := docker compose -f docker-compose.yml -f docker-compose.prod-remote.yml
 
-help:
-	@echo "up        - start dev stack (alias for 'make dev', docker compose up -d; override auto-loads)"
-	@echo "down      - stop dev stack (alias for 'make dev' stack)"
-	@echo "restart   - restart dev stack (alias for 'make dev' stack)"
-	@echo "logs      - follow dev stack backend container logs"
-	@echo "ps        - show container status"
-	@echo "build     - build dev stack docker images (override auto-loads)"
-	@echo "rebuild   - build --no-cache + up (dev stack)"
-	@echo "dev       - start dev stack with hot reload (docker compose up, base + override)"
-	@echo "install   - uv sync (with dev deps) in backend/"
-	@echo "test      - run pytest in backend/"
-	@echo "audit     - run pnpm audit (high+ severity) in frontend/"
-	@echo "clean     - remove backend .venv and caches"
-	@echo "up-home     - start LAN self-hosted stack (backend+frontend+caddy on :8080)"
-	@echo "down-home   - stop LAN self-hosted stack"
-	@echo "logs-home   - follow logs for the LAN self-hosted stack"
-	@echo "up-remote   - start remote-server stack (backend:8011, frontend:3010, no caddy)"
-	@echo "down-remote - stop remote-server stack"
-	@echo "logs-remote - follow logs for the remote-server stack"
+# Variables that must be set in .env before starting a stack (see .env.example)
+REQUIRED_ENV := OAUTH_ISSUER OAUTH_CLIENT_ID OAUTH_CLIENT_SECRET PUBLIC_ORIGIN
 
-up:
-	docker compose up -d
+.DEFAULT_GOAL := help
+.PHONY: help env-check dev up down restart logs ps build rebuild install test audit clean \
+        prod-check prod-build prod-up prod-deploy prod-down prod-restart prod-logs prod-ps
 
-down:
-	docker compose down
+## —— Help ——————————————————————————————————————————————————————————————
+help: ## List the commands
+	@grep -E '(^[a-zA-Z_-]+:.*?## .*$$)|(^## )' $(MAKEFILE_LIST) \
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "\033[32m%-14s\033[0m %s\n", $$1, $$2}' | sed -e 's/\[32m## /\n[33m/'
 
-restart: down up
+env-check: ## Check that .env exists and holds every OAuth variable
+	@test -f .env || (echo "Missing .env: cp .env.example .env, then fill it (docs/deploiement.md)." && exit 1)
+	@set -a; . ./.env; set +a; missing=""; \
+	for v in $(REQUIRED_ENV); do eval "val=\$${$$v:-}"; [ -n "$$val" ] || missing="$$missing $$v"; done; \
+	if [ -n "$$missing" ]; then echo "Empty in .env:$$missing" && exit 1; fi
 
-logs:
-	docker compose logs -f backend
+## —— Dev (hot reload, http://localhost:FRONTEND_PORT) ———————————————————
+dev: env-check ## Start the dev stack in the foreground (Ctrl+C to stop)
+	@$(DEV_COMP) up --build
 
-ps:
-	docker compose ps
+up: env-check ## Start the dev stack in the background
+	@$(DEV_COMP) up -d --build
 
-build:
-	docker compose build
+down: ## Stop the dev stack
+	@$(DEV_COMP) down
 
-rebuild:
-	docker compose build --no-cache
-	docker compose up -d
+restart: down up ## Restart the dev stack
 
-dev:
-	docker compose up
+logs: ## Follow the dev stack logs
+	@$(DEV_COMP) logs -f
 
-install:
+ps: ## Dev containers status
+	@$(DEV_COMP) ps
+
+build: ## Build the dev images
+	@$(DEV_COMP) build
+
+rebuild: ## Rebuild the dev images from scratch, then start
+	@$(DEV_COMP) build --no-cache
+	@$(DEV_COMP) up -d
+
+install: ## uv sync (with dev deps) in backend/
 	cd $(BACKEND_DIR) && uv sync
 
-test:
+test: ## Run the backend tests
 	cd $(BACKEND_DIR) && uv run pytest
 
-audit:
+audit: ## pnpm audit (high+ severity) in frontend/
 	cd frontend && pnpm audit --audit-level=high
 
-clean:
+clean: ## Remove backend .venv and caches
 	rm -rf $(BACKEND_DIR)/.venv $(BACKEND_DIR)/.pytest_cache
 
-up-home:
-	docker compose -f docker-compose.yml -f docker-compose.prod-home.yml up -d
+## —— Production (frontend on 127.0.0.1:REMOTE_FRONTEND_PORT, behind Caddy) ——
+prod-check: env-check ## Check .env for production (no dev-only values)
+	@set -a; . ./.env; set +a; \
+	case "$$PUBLIC_ORIGIN" in https://*) ;; *) echo "PUBLIC_ORIGIN must be https:// in production" && exit 1;; esac; \
+	case "$$OAUTH_ISSUER" in https://*) ;; *) echo "OAUTH_ISSUER must be https:// in production" && exit 1;; esac; \
+	[ "$${APP_ENV:-prod}" = prod ] || (echo "APP_ENV must be prod in production" && exit 1)
 
-down-home:
-	docker compose -f docker-compose.yml -f docker-compose.prod-home.yml down
+prod-build: prod-check ## Build the production images
+	@$(PROD_COMP) build --pull
 
-logs-home:
-	docker compose -f docker-compose.yml -f docker-compose.prod-home.yml logs -f
+prod-up: prod-check ## Start (or update) production
+	@$(PROD_COMP) up -d --wait
 
-up-remote:
-	docker compose -f docker-compose.yml -f docker-compose.prod-remote.yml up -d
+prod-deploy: prod-check ## Deploy an update: git pull, build, restart
+	@git pull --ff-only
+	@$(MAKE) --no-print-directory prod-build prod-up
+	@$(PROD_COMP) ps
 
-down-remote:
-	docker compose -f docker-compose.yml -f docker-compose.prod-remote.yml down
+prod-down: ## Stop production
+	@$(PROD_COMP) down
 
-logs-remote:
-	docker compose -f docker-compose.yml -f docker-compose.prod-remote.yml logs -f
+prod-restart: ## Restart production (no rebuild)
+	@$(PROD_COMP) restart
+
+prod-logs: ## Follow production logs
+	@$(PROD_COMP) logs --tail=200 -f
+
+prod-ps: ## Production containers status
+	@$(PROD_COMP) ps

@@ -1,4 +1,4 @@
-name: Frontend dependency audit
+name: Dependency audit
 
 on:
   push:
@@ -6,26 +6,58 @@ on:
     paths:
       - frontend/package.json
       - frontend/pnpm-lock.yaml
+      - backend/pyproject.toml
+      - backend/uv.lock
+      - .github/workflows/audit.yml
   pull_request:
     paths:
       - frontend/package.json
       - frontend/pnpm-lock.yaml
+      - backend/pyproject.toml
+      - backend/uv.lock
+      - .github/workflows/audit.yml
+  schedule:
+    # Weekly: new advisories appear without any change in the repo.
+    - cron: '23 5 * * 1'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  audit:
+  frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
         with:
           version: 11.17.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: ./frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-        working-directory: frontend
+        working-directory: ./frontend
       - run: pnpm run audit
-        working-directory: frontend
+        working-directory: ./frontend
+
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Audit production dependencies (pip-audit, OSV/PyPI advisories)
+        working-directory: ./backend
+        run: |
+          uv export --frozen --no-dev --no-hashes --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit -r "$RUNNER_TEMP/requirements.txt" --no-deps --disable-pip --strict
