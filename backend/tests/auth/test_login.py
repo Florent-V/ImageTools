@@ -1,101 +1,140 @@
-import hashlib
+import sqlite3
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from .conftest import ISSUER, ORIGIN, USER_ID, USER_SUB
+from app.auth.routes import safe_return_to
+from app.auth.store import hash_id
+from tests.auth.conftest import ORIGIN, client_for, login
+from tests.auth.fake_server import CLIENT_ID
 
 pytestmark = pytest.mark.anyio
 
 
-async def test_login_redirects_with_pkce_s256(env):
-    response = await env.client.get("/auth/login")
+@pytest.fixture
+async def running(build_app):
+    app, ctx = build_app()
+    async with app.router.lifespan_context(app):
+        async with client_for(app) as client:
+            yield client, ctx, app
+
+
+async def test_login_redirects_with_pkce_s256_and_state(running):
+    client, _, _ = running
+    response = await client.get("/auth/login")
     assert response.status_code == 302
-    location = response.headers["location"]
-    assert location.startswith(f"{ISSUER}/authorize?")
-    query = parse_qs(urlparse(location).query)
+    url = urlparse(response.headers["location"])
+    query = parse_qs(url.query)
+    assert url.path == "/authorize"
     assert query["code_challenge_method"] == ["S256"]
-    assert len(query["code_challenge"][0]) == 43
-    assert query["response_type"] == ["code"]
+    assert query["client_id"] == [CLIENT_ID]
     assert query["redirect_uri"] == [f"{ORIGIN}/auth/callback"]
+    assert query["response_type"] == ["code"]
+    assert len(query["state"][0]) >= 32 and "code_challenge" in query
 
 
-async def test_login_then_callback_opens_a_session(env):
-    response = await env.login("/crop?x=1")
+@pytest.mark.parametrize("value", ["//evil.com", "https://evil.com", "/\\evil.com", "evil", "/a\\b", "/a\nb", None, ""])
+def test_malicious_return_to_falls_back_to_root(value):
+    assert safe_return_to(value) == "/"
+
+
+def test_local_return_to_is_kept():
+    assert safe_return_to("/tools/merge?x=1") == "/tools/merge?x=1"
+
+
+async def test_login_stores_a_session_and_goes_back_to_return_to(running, server):
+    client, ctx, _ = running
+    response = await login(client, server, return_to="/tools/merge")
     assert response.status_code == 302
-    assert response.headers["location"] == "/crop?x=1"
-    me = await env.client.get("/api/me")
+    assert response.headers["location"] == "/tools/merge"
+    me = await client.get("/api/me")
     assert me.status_code == 200
-    assert me.json() == {"sub": USER_SUB, "id": USER_ID, "name": "alice", "email": USER_SUB, "roles": []}
-    assert me.headers["cache-control"] == "no-store"
+    assert me.json() == {"sub": "uid-alice", "name": "alice", "email": "alice@example.com", "roles": []}
 
 
-@pytest.mark.parametrize("return_to", ["//evil.com", "https://evil.com", "/\\evil.com", "evil", "/\r\nx", ""])
-async def test_malicious_return_to_is_replaced(env, return_to):
-    response = await env.login(return_to)
-    assert response.headers["location"] == "/"
+async def test_cookie_attributes_and_no_token_in_it(running, server):
+    client, ctx, _ = running
+    response = await login(client, server)
+    cookie = response.headers["set-cookie"]
+    assert cookie.startswith("session=")
+    assert "HttpOnly" in cookie and "SameSite=lax" in cookie and "Path=/" in cookie
+    value = cookie.split(";")[0].split("=", 1)[1]
+    assert "at-" not in value and "rt-" not in value
+    # Only the hash is in the database, tokens are server-side.
+    db = sqlite3.connect(ctx.settings.session_db_path)
+    ids = [row[0] for row in db.execute("SELECT id_hash FROM sessions")]
+    assert ids == [hash_id(value)] and value not in ids
 
 
-async def test_unknown_state_is_rejected(env):
-    response = await env.client.get("/auth/callback", params={"code": "x", "state": "unknown"})
-    assert response.status_code == 400
-    assert not env.sessions()
+async def test_prod_cookie_is_host_prefixed_and_secure(build_app, server):
+    app, _ = build_app(app_env="prod", cookie_secure=True)
+    server.metadata["issuer"] = server.metadata["issuer"]  # https already
+    async with app.router.lifespan_context(app):
+        async with client_for(app) as client:
+            response = await login(client, server)
+    cookie = response.headers["set-cookie"]
+    assert cookie.startswith("__Host-session=") and "Secure" in cookie
 
 
-async def test_replayed_state_is_rejected(env):
-    login = await env.client.get("/auth/login")
-    callback = env.server.authorize(login.headers["location"])
-    assert (await env.client.get(callback)).status_code == 302
-    assert (await env.client.get(callback)).status_code == 400
+async def test_session_id_changes_at_every_login(running, server):
+    client, ctx, _ = running
+    first = (await login(client, server)).headers["set-cookie"].split(";")[0]
+    second = (await login(client, server)).headers["set-cookie"].split(";")[0]
+    assert first != second
 
 
-async def test_expired_state_is_rejected(env):
-    login = await env.client.get("/auth/login")
-    env.db().execute("UPDATE login_attempts SET expires_at = expires_at - 601")
-    response = await env.client.get(env.server.authorize(login.headers["location"]))
-    assert response.status_code == 400
+async def test_unknown_state_is_refused(running):
+    client, _, _ = running
+    assert (await client.get("/auth/callback", params={"code": "x", "state": "nope"})).status_code == 400
 
 
-async def test_server_error_is_shown_without_loop(env):
-    response = await env.client.get("/auth/callback", params={"error": "access_denied", "state": "x"})
+async def test_replayed_state_is_refused(running, server):
+    client, _, _ = running
+    response = await client.get("/auth/login")
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    params = {"code": server.authorize(query), "state": query["state"][0]}
+    assert (await client.get("/auth/callback", params=params)).status_code == 302
+    assert (await client.get("/auth/callback", params=params)).status_code == 400
+
+
+async def test_expired_state_is_refused(running, server):
+    client, ctx, _ = running
+    response = await client.get("/auth/login")
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    db = sqlite3.connect(ctx.settings.session_db_path)
+    db.execute("UPDATE login_attempts SET expires_at = 0")
+    db.commit()
+    params = {"code": server.authorize(query), "state": query["state"][0]}
+    assert (await client.get("/auth/callback", params=params)).status_code == 400
+
+
+async def test_oauth_error_redirects_without_looping(running):
+    client, _, _ = running
+    response = await client.get("/auth/callback", params={"error": "access_denied", "state": "x"})
     assert response.status_code == 302
     assert response.headers["location"] == "/?auth_error=access_denied"
 
 
-async def test_iss_is_checked_when_announced(env):
-    env.server.metadata["authorization_response_iss_parameter_supported"] = True
-    await env.auth.client.discovery.refresh()
-
-    login = await env.client.get("/auth/login")
-    callback = env.server.authorize(login.headers["location"])
-    assert (await env.client.get(callback + "&iss=https://evil.test")).status_code == 400
-
-    login = await env.client.get("/auth/login")
-    callback = env.server.authorize(login.headers["location"])
-    assert (await env.client.get(callback + f"&iss={ISSUER}")).status_code == 302
+async def test_wrong_code_verifier_is_refused_by_the_server(running, server):
+    client, _, _ = running
+    response = await client.get("/auth/login")
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    server.authorize(query)
+    server.codes["code-1"] = "another-challenge"
+    response = await client.get("/auth/callback", params={"code": "code-1", "state": query["state"][0]})
+    assert response.status_code == 400 and response.json() == {"error": "invalid_grant"}
 
 
-async def test_session_id_changes_at_each_login(env):
-    await env.login()
-    first = env.client.cookies["__Host-session"]
-    await env.login()
-    second = env.client.cookies["__Host-session"]
-    assert first != second
-    # The previous session is dropped, not left behind
-    assert [row["id_hash"] for row in env.sessions()] == [hashlib.sha256(second.encode()).hexdigest()]
-
-
-async def test_cookie_attributes_and_content(env):
-    response = await env.login()
-    set_cookie = response.headers["set-cookie"]
-    name_value, *attributes = [part.strip() for part in set_cookie.split(";")]
-    name, value = name_value.split("=", 1)
-    assert name == "__Host-session"
-    assert {a.lower() for a in attributes} >= {"httponly", "secure", "samesite=lax", "path=/"}
-    assert not any(a.lower().startswith("domain") for a in attributes)
-
-    row = env.sessions()[0]
-    # Opaque random id: no token in it, and only its hash is stored
-    assert value not in (row["access_token"], row["refresh_token"])
-    assert row["id_hash"] == hashlib.sha256(value.encode()).hexdigest()
-    assert value not in str(dict(row))
+async def test_iss_parameter_is_checked_when_the_server_announces_it(build_app, server):
+    server.metadata["authorization_response_iss_parameter_supported"] = True
+    app, _ = build_app()
+    async with app.router.lifespan_context(app):
+        async with client_for(app) as client:
+            response = await client.get("/auth/login")
+            query = parse_qs(urlparse(response.headers["location"]).query)
+            params = {"code": server.authorize(query), "state": query["state"][0]}
+            assert (await client.get("/auth/callback", params={**params, "iss": "https://evil.test"})).status_code == 400
+            response = await client.get("/auth/login")
+            query = parse_qs(urlparse(response.headers["location"]).query)
+            params = {"code": server.authorize(query), "state": query["state"][0], "iss": server.metadata["issuer"]}
+            assert (await client.get("/auth/callback", params=params)).status_code == 302

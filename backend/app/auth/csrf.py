@@ -1,18 +1,15 @@
-"""CSRF: state-changing requests must come from our own origin. No CORS at all."""
+from starlette.datastructures import Headers
 
-from collections.abc import Mapping
-
-UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-EXEMPT_PATHS = {"/auth/backchannel-logout"}
+UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def needs_check(method: str, path: str) -> bool:
-    if method not in UNSAFE_METHODS or path in EXEMPT_PATHS:
-        return False
-    return path.startswith("/api/") or path == "/auth/logout"
+    """State-changing requests to the API and the logout. The back-channel
+    logout is sent by the OAuth server (no browser, no Origin): not covered."""
+    return method in UNSAFE_METHODS and (path.startswith("/api/") or path == "/auth/logout")
 
 
-def is_same_origin(headers: Mapping[str, str], public_origin: str) -> bool:
+def is_allowed(headers: Headers, public_origin: str) -> bool:
     origin = headers.get("origin")
     if origin is not None:
         return origin == public_origin

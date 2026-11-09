@@ -1,77 +1,76 @@
-"""Back-channel logout token verification (OpenID Connect Back-Channel Logout 1.0 §2.6)."""
-
 import time
-from typing import Any
 
 import jwt
+from jwt import PyJWKClient
 from starlette.concurrency import run_in_threadpool
 
-from .config import AuthSettings
-from .discovery import Discovery
-from .store import SessionStore
+from app.auth.config import AuthSettings
+from app.auth.discovery import Discovery
+from app.auth.store import SessionStore
 
-EVENT = "http://schemas.openid.net/event/backchannel-logout"
-# Used when the server doesn't list its signing algorithms. Never "none", never HMAC.
-ASYMMETRIC_ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"]
-IAT_MAX_SKEW_S = 300
+BACKCHANNEL_EVENT = "http://schemas.openid.net/event/backchannel-logout"
+IAT_TOLERANCE = 300
+DEFAULT_ALGORITHMS = ["RS256"]
 
 
-class LogoutTokenError(Exception):
+class InvalidToken(Exception):
     pass
 
 
-class LogoutTokenVerifier:
-    def __init__(self, settings: AuthSettings, discovery: Discovery, store: SessionStore) -> None:
+class TokenVerifier:
+    """Verifies the JWTs signed by the OAuth server (logout tokens, and the
+    id_token / access token when they are used to identify the user), with
+    the keys of its `jwks_uri`. PyJWKClient caches them and follows a rotation
+    through the `kid` header."""
+
+    def __init__(self, settings: AuthSettings, discovery: Discovery):
         self.settings = settings
         self.discovery = discovery
-        self.store = store
-        self._jwk_client: jwt.PyJWKClient | None = None
+        self._jwks: dict[str, PyJWKClient] = {}
 
-    def jwks(self, uri: str) -> jwt.PyJWKClient:
-        # Caches the keys; an unknown kid triggers one JWKS reload (key rotation)
-        if self._jwk_client is None or self._jwk_client.uri != uri:
-            self._jwk_client = jwt.PyJWKClient(uri, cache_keys=True, lifespan=3600)
-        return self._jwk_client
-
-    async def _key_and_algorithms(self, token: str) -> tuple[Any, list[str]]:
+    def _key_and_algorithms(self, token: str):
         jwks_uri = self.discovery.get("jwks_uri")
+        algorithms = [
+            alg for alg in self.discovery.get("id_token_signing_alg_values_supported") or DEFAULT_ALGORITHMS
+            if alg.lower() != "none"
+        ]
         if jwks_uri:
-            try:
-                signing_key = await run_in_threadpool(self.jwks(jwks_uri).get_signing_key_from_jwt, token)
-            except jwt.PyJWTError as exc:
-                raise LogoutTokenError(f"signing key: {exc}") from exc
-            advertised = self.discovery.get("id_token_signing_alg_values_supported")
-            algorithms = [a for a in (advertised or ASYMMETRIC_ALGORITHMS) if a in ASYMMETRIC_ALGORITHMS]
-            return signing_key.key, algorithms
-        if self.settings.oauth_logout_token_secret is not None:
-            return self.settings.oauth_logout_token_secret.get_secret_value(), ["HS256"]
-        raise LogoutTokenError("no key to verify logout tokens")
+            client = self._jwks.get(jwks_uri) or self._jwks.setdefault(
+                jwks_uri, PyJWKClient(jwks_uri, cache_keys=True, lifespan=3600)
+            )
+            # A public key must never be usable as an HMAC secret.
+            algorithms = [alg for alg in algorithms if not alg.upper().startswith("HS")] or DEFAULT_ALGORITHMS
+            return client.get_signing_key_from_jwt(token).key, algorithms
+        return self.settings.oauth_logout_token_secret, ["HS256"]
 
-    async def verify(self, token: str) -> dict[str, Any]:
-        key, algorithms = await self._key_and_algorithms(token)
+    def decode(self, token: str, *, issuer: str | None, required: list[str]) -> dict:
+        """Blocking (PyJWKClient is synchronous): call it through a thread pool."""
         try:
-            claims = jwt.decode(
+            key, algorithms = self._key_and_algorithms(token)
+            return jwt.decode(
                 token,
                 key,
                 algorithms=algorithms,
                 audience=self.settings.oauth_client_id,
-                issuer=self.settings.oauth_issuer,
-                leeway=60,
-                options={"require": ["iss", "aud", "iat", "jti", "events"]},
+                issuer=issuer,
+                options={"require": required},
             )
         except jwt.PyJWTError as exc:
-            raise LogoutTokenError(str(exc)) from exc
+            raise InvalidToken(str(exc)) from exc
 
-        if abs(time.time() - claims["iat"]) > IAT_MAX_SKEW_S:
-            raise LogoutTokenError("iat too old or in the future")
-        events = claims.get("events")
-        if not isinstance(events, dict) or EVENT not in events:
-            raise LogoutTokenError("missing back-channel logout event")
+    async def decode_async(self, token: str, *, issuer: str | None, required: list[str]) -> dict:
+        return await run_in_threadpool(self.decode, token, issuer=issuer, required=required)
+
+    async def verify_logout_token(self, token: str, store: SessionStore) -> dict:
+        claims = await self.decode_async(token, issuer=self.settings.oauth_issuer, required=["iss", "aud", "iat", "jti"])
+        if abs(time.time() - claims["iat"]) > IAT_TOLERANCE:
+            raise InvalidToken("iat out of range")
+        if BACKCHANNEL_EVENT not in (claims.get("events") or {}):
+            raise InvalidToken("backchannel-logout event missing")
         if "nonce" in claims:
-            raise LogoutTokenError("nonce is forbidden in a logout token")
-        if not claims.get("sub") and not claims.get("sid"):
-            raise LogoutTokenError("sub or sid required")
-        expires_at = int(claims.get("exp") or time.time() + 2 * IAT_MAX_SKEW_S)
-        if not await self.store.remember_jti(str(claims["jti"]), expires_at):
-            raise LogoutTokenError("replayed jti")
+            raise InvalidToken("nonce must not be present in a logout token")
+        if not (claims.get("sub") or claims.get("sid") or claims.get("uid")):
+            raise InvalidToken("sub or sid missing")
+        if not await store.mark_jti(claims["jti"], time.time() + 2 * IAT_TOLERANCE):
+            raise InvalidToken("logout token already used")
         return claims

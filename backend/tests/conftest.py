@@ -10,18 +10,24 @@ os.environ.setdefault("OAUTH_CLIENT_ID", "app-test")
 os.environ.setdefault("OAUTH_CLIENT_SECRET", "secret-test")
 os.environ.setdefault("PUBLIC_ORIGIN", "http://testserver")
 os.environ.setdefault("SESSION_DB_PATH", os.path.join(tempfile.mkdtemp(), "sessions.db"))
+os.environ.setdefault("APP_ENV", "dev")
+os.environ.setdefault("COOKIE_SECURE", "false")
 
 
 @pytest.fixture(autouse=True)
 def _authenticated(request, monkeypatch):
-    """Outside tests/auth/, the suite runs as an already-authenticated user,
-    from the same origin."""
-    if "tests/auth/" in str(request.path).replace(os.sep, "/"):
+    """Outside tests/auth/, the suite runs as an already-authenticated user:
+    the session cookie value *is* the user, "test-user" when there is no cookie.
+    The session machinery itself is covered by tests/auth."""
+    if ".auth." in request.module.__name__:
         return
-    from app.auth.middleware import AuthMiddleware
+    from app.auth import csrf
+    from app.auth.deps import AuthUser
+    from app.main import auth
 
-    async def authenticate(self, scope):
-        return {"sub": "user@test", "id": "test-user", "name": "Test", "email": "user@test", "roles": []}
+    async def fake_authenticate(ctx, session_id):
+        return AuthUser(sub=session_id or "test-user", name="Test", email="test@example.com")
 
-    monkeypatch.setattr(AuthMiddleware, "authenticate", authenticate)
-    monkeypatch.setattr("app.auth.csrf.is_same_origin", lambda headers, origin: True)
+    monkeypatch.setattr("app.auth.middleware.authenticate", fake_authenticate)
+    monkeypatch.setattr(csrf, "needs_check", lambda method, path: False)
+    monkeypatch.setattr(auth.discovery, "metadata", {"issuer": auth.settings.oauth_issuer})

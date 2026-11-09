@@ -1,109 +1,123 @@
-"""OAuth server metadata (RFC 8414): fetched at startup, validated, cached in
-memory and refreshed in the background."""
-
 import asyncio
 import logging
-from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
-from .config import AuthSettings
+from app.auth.config import AuthSettings
 
-logger = logging.getLogger("auth.discovery")
+log = logging.getLogger("app.auth")
 
-WELL_KNOWN = ("/.well-known/oauth-authorization-server", "/.well-known/openid-configuration")
-SUPPORTED_AUTH_METHODS = ("client_secret_basic", "client_secret_post")
+REFRESH_INTERVAL = 3600
+RETRY_INTERVAL = 30
 
 
 class DiscoveryError(Exception):
-    """The server answered, but its metadata can't be used: the app must not start."""
+    """The server's metadata cannot be used."""
+
+
+class DiscoveryUnavailable(DiscoveryError):
+    """The server could not be reached (or answered 5xx): worth retrying."""
+
+
+def candidate_urls(issuer: str) -> list[str]:
+    """RFC 8414 puts `/.well-known/…` between the host and the issuer's path;
+    OpenID Connect Discovery appends it after the path."""
+    parts = urlsplit(issuer)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    path = parts.path.rstrip("/")
+    return [
+        f"{origin}/.well-known/oauth-authorization-server{path}",
+        f"{issuer.rstrip('/')}/.well-known/openid-configuration",
+    ]
+
+
+def validate(metadata: dict, settings: AuthSettings) -> None:
+    """RFC 8414 §3.3 and RFC 9700 checks. Raises DiscoveryError."""
+    # Strict string equality: a trailing slash is a different issuer.
+    if metadata.get("issuer") != settings.oauth_issuer:
+        raise DiscoveryError(
+            f"issuer mismatch: metadata says {metadata.get('issuer')!r}, "
+            f"OAUTH_ISSUER is {settings.oauth_issuer!r}"
+        )
+    if "S256" not in metadata.get("code_challenge_methods_supported", []):
+        raise DiscoveryError("the server does not advertise PKCE S256")
+    for key in ("authorization_endpoint", "token_endpoint"):
+        url = metadata.get(key)
+        if not url:
+            raise DiscoveryError(f"{key} is missing from the metadata")
+        if not settings.dev and urlsplit(url).scheme != "https":
+            raise DiscoveryError(f"{key} must be https (got {url!r})")
+    if not metadata.get("jwks_uri") and not settings.oauth_logout_token_secret:
+        raise DiscoveryError(
+            "no jwks_uri in the metadata: set OAUTH_LOGOUT_TOKEN_SECRET to verify logout tokens"
+        )
 
 
 class Discovery:
-    refresh_interval_s = 3600
-    # Retry delays while the server is unreachable (startup, then not-ready loop)
-    retry_delays_s: tuple[float, ...] = (1, 2, 4, 8, 16)
-    not_ready_retry_s = 30
+    """Metadata of the OAuth server, cached in memory and refreshed hourly."""
 
-    def __init__(self, settings: AuthSettings, http: httpx.AsyncClient) -> None:
+    def __init__(self, settings: AuthSettings, http: httpx.AsyncClient):
         self.settings = settings
         self.http = http
-        self.metadata: dict[str, Any] | None = None
+        self.metadata: dict | None = None
 
     @property
     def ready(self) -> bool:
         return self.metadata is not None
 
-    def get(self, key: str) -> Any:
-        return self.metadata.get(key) if self.metadata else None
+    def get(self, key: str, default=None):
+        return (self.metadata or {}).get(key, default)
 
-    def __getitem__(self, key: str) -> Any:
-        if self.metadata is None:
-            raise RuntimeError("OAuth server metadata not loaded yet")
-        return self.metadata[key]
-
-    @property
-    def token_endpoint_auth_method(self) -> str:
-        supported = self.get("token_endpoint_auth_methods_supported") or ["client_secret_basic"]
-        return next(m for m in supported if m in SUPPORTED_AUTH_METHODS)
-
-    async def fetch(self) -> dict[str, Any]:
-        """Fetch and validate the metadata. Raises DiscoveryError (unusable
-        metadata) or httpx.HTTPError (server unreachable / failing)."""
-        issuer = self.settings.oauth_issuer
-        response = None
-        for path in WELL_KNOWN:
-            response = await self.http.request("GET", f"{issuer.rstrip('/')}{path}", withhold_token=True)
-            if response.status_code != 404:
-                break
-        response.raise_for_status()
-        metadata = response.json()
-        self.validate(metadata)
-        return metadata
-
-    def validate(self, metadata: Any) -> None:
-        settings = self.settings
-        if not isinstance(metadata, dict):
-            raise DiscoveryError("metadata is not a JSON object")
-        if metadata.get("issuer") != settings.oauth_issuer:
-            raise DiscoveryError(
-                f"issuer mismatch: server says {metadata.get('issuer')!r}, OAUTH_ISSUER is {settings.oauth_issuer!r}"
-            )
-        if "S256" not in (metadata.get("code_challenge_methods_supported") or []):
-            raise DiscoveryError("server does not support PKCE S256")
-        for key in ("authorization_endpoint", "token_endpoint"):
-            url = metadata.get(key)
-            if not url:
-                raise DiscoveryError(f"{key} missing")
-            if settings.app_env != "dev" and not url.startswith("https://"):
-                raise DiscoveryError(f"{key} must be https: {url}")
-        if not metadata.get("jwks_uri") and settings.oauth_logout_token_secret is None:
-            raise DiscoveryError("no jwks_uri: OAUTH_LOGOUT_TOKEN_SECRET is required to verify logout tokens")
-        supported = metadata.get("token_endpoint_auth_methods_supported") or ["client_secret_basic"]
-        if not any(m in SUPPORTED_AUTH_METHODS for m in supported):
-            raise DiscoveryError(f"no supported client authentication method in {supported}")
+    async def fetch(self) -> dict:
+        last: Exception | None = None
+        for url in candidate_urls(self.settings.oauth_issuer):
+            try:
+                response = await self.http.get(url, auth=None)
+            except httpx.HTTPError as exc:
+                raise DiscoveryUnavailable(f"{url}: {exc}") from exc
+            if response.status_code == 404:
+                last = DiscoveryError(f"{url}: 404")
+                continue
+            if response.status_code >= 500:
+                raise DiscoveryUnavailable(f"{url}: HTTP {response.status_code}")
+            if response.status_code != 200:
+                raise DiscoveryError(f"{url}: HTTP {response.status_code}")
+            try:
+                metadata = response.json()
+            except ValueError as exc:
+                raise DiscoveryError(f"{url}: not JSON") from exc
+            if not isinstance(metadata, dict):
+                raise DiscoveryError(f"{url}: unexpected document")
+            return metadata
+        raise last or DiscoveryError("no discovery document found")
 
     async def load(self) -> None:
-        """Startup: retry while unreachable; DiscoveryError propagates."""
-        for attempt, delay in enumerate((*self.retry_delays_s, None), start=1):
+        metadata = await self.fetch()
+        validate(metadata, self.settings)
+        self.metadata = metadata
+
+    async def load_with_retry(self, attempts: int = 5, base_delay: float = 1.0) -> None:
+        """Backoff on unreachable server only; an invalid document fails at once."""
+        for attempt in range(attempts):
             try:
-                self.metadata = await self.fetch()
-                logger.info("OAuth server metadata loaded from %s", self.settings.oauth_issuer)
+                await self.load()
                 return
-            except httpx.HTTPError as exc:
-                logger.warning("OAuth server unreachable (attempt %d): %s", attempt, exc)
-                if delay is not None:
-                    await asyncio.sleep(delay)
-        logger.error("OAuth server still unreachable: not ready, retrying in the background")
+            except DiscoveryUnavailable as exc:
+                if attempt == attempts - 1:
+                    raise
+                delay = base_delay * 2**attempt
+                log.warning("OAuth discovery unavailable (%s), retrying in %.0fs", exc, delay)
+                await asyncio.sleep(delay)
 
-    async def refresh(self) -> None:
-        """Background refresh: a failure keeps the previous metadata."""
-        try:
-            self.metadata = await self.fetch()
-        except (httpx.HTTPError, DiscoveryError, ValueError) as exc:
-            logger.warning("OAuth metadata refresh failed, keeping the cached copy: %s", exc)
-
-    async def refresh_forever(self) -> None:
+    async def keep_fresh(self) -> None:
+        """Background task: retries until the first success, then refreshes
+        hourly. A failed refresh keeps the previous metadata."""
         while True:
-            await asyncio.sleep(self.refresh_interval_s if self.ready else self.not_ready_retry_s)
-            await self.refresh()
+            await asyncio.sleep(REFRESH_INTERVAL if self.ready else RETRY_INTERVAL)
+            try:
+                await self.load()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("OAuth discovery refresh failed, keeping previous metadata: %s", exc)

@@ -1,13 +1,14 @@
 import logging
 import time
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from app.api.pwa_routes import router as pwa_router
 from app.api.routes import router
 from app.api.video_routes import router as video_router
-from app.auth import AuthSettings, auth_ready, current_user, setup_auth
+from app.auth import setup_auth
+from app.auth.config import AuthSettings
 from app.errors import ImageError
 
 logging.basicConfig(
@@ -19,12 +20,11 @@ logger = logging.getLogger("imagetools")
 app = FastAPI(title="ImageTools", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
 # This backend is the OAuth client (BFF): server-side sessions, opaque cookie.
-# The session is checked by a middleware before any upload body is read;
-# current_user on the routers is a second guard. Same origin as the front
-# (behind Caddy): no CORS. /api/health stays open for probes.
-setup_auth(app, AuthSettings(), protected_prefixes=["/api/"], public_paths=["/api/health"], post_logout_redirect="/logged-out")
+# The middleware answers 401 before any upload body is read and exposes the
+# user as request.state.user. Same origin as the front (behind Caddy): no CORS.
+auth = setup_auth(app, AuthSettings(), protected_prefixes=("/api",), public_paths=("/api/health",))
 for _router in (router, pwa_router, video_router):
-    app.include_router(_router, dependencies=[Depends(current_user)])
+    app.include_router(_router)
 
 
 @app.middleware("http")
@@ -74,6 +74,6 @@ async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResp
 @app.get("/api/health")
 async def health() -> Response:
     # 503 until the OAuth server metadata is loaded: not ready to log anyone in
-    if not auth_ready(app):
+    if not auth.discovery.ready:
         return JSONResponse({"status": "starting"}, status_code=503)
     return JSONResponse({"status": "ok"})

@@ -1,127 +1,103 @@
-"""OAuth client: Authlib AsyncOAuth2Client (authorization URL, code exchange,
-refresh, revocation, userinfo). Also the single shared HTTP client.
-
-Not authlib.integrations.starlette_client: it keeps its state in Starlette's
-SessionMiddleware, a signed cookie that can't be revoked.
-"""
-
 import logging
-import warnings
-from typing import Any
 
 import httpx
+from authlib.integrations.base_client.errors import OAuthError
+from authlib.integrations.httpx_client import AsyncOAuth2Client
 
-with warnings.catch_warnings():
-    # Authlib >= 1.7 prefers the httpx2 package and warns when it falls back to httpx
-    warnings.simplefilter("ignore")
-    from authlib.integrations.httpx_client import AsyncOAuth2Client, OAuthError
+from app.auth.config import AuthSettings
+from app.auth.discovery import Discovery
 
-from .config import AuthSettings
-from .discovery import Discovery
-
-logger = logging.getLogger("auth.client")
+log = logging.getLogger("app.auth")
 
 TIMEOUT = httpx.Timeout(10.0, connect=5.0)
-# Token endpoint refusals that mean the grant is gone for good
-FATAL_ERRORS = {"invalid_grant", "invalid_client", "unauthorized_client"}
 
 
-class GrantRevoked(Exception):
-    """The server refused the code or refresh token: the session must end."""
+class InvalidGrant(Exception):
+    """The refresh token (or code) is refused for good: expired, revoked, access removed."""
 
 
-class ServerUnavailable(Exception):
-    """Network error, timeout or 5xx: keep the session, try again later."""
+class TemporaryError(Exception):
+    """Network failure or 5xx: the session must be kept and the call retried."""
 
 
 class OAuthClient:
-    def __init__(self, settings: AuthSettings, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    """Authorization code + PKCE S256 client. Authlib's starlette integration
+    is deliberately not used: it keeps its state in a signed cookie, which
+    cannot be revoked. One httpx client (Authlib's) serves every call."""
+
+    def __init__(self, settings: AuthSettings, discovery: Discovery, transport: httpx.AsyncBaseTransport | None = None):
         self.settings = settings
+        self.discovery = discovery
         self.http = AsyncOAuth2Client(
             client_id=settings.oauth_client_id,
-            client_secret=settings.oauth_client_secret.get_secret_value(),
+            client_secret=settings.oauth_client_secret,
             scope=settings.oauth_scopes,
             redirect_uri=settings.redirect_uri,
             code_challenge_method="S256",
             timeout=TIMEOUT,
             transport=transport,
         )
-        self.discovery = Discovery(settings, self.http)
 
     async def aclose(self) -> None:
         await self.http.aclose()
 
-    def _configure(self) -> None:
-        self.http.token_endpoint_auth_method = self.discovery.token_endpoint_auth_method
+    def _auth_method(self) -> str:
+        supported = self.discovery.get("token_endpoint_auth_methods_supported") or ["client_secret_basic"]
+        for method in ("client_secret_basic", "client_secret_post"):
+            if method in supported:
+                return method
+        return "client_secret_basic"
 
     def authorization_url(self, state: str, code_verifier: str, nonce: str | None) -> str:
         extra = {"nonce": nonce} if nonce else {}
         url, _ = self.http.create_authorization_url(
-            self.discovery["authorization_endpoint"], state=state, code_verifier=code_verifier, **extra
+            self.discovery.get("authorization_endpoint"), state=state, code_verifier=code_verifier, **extra
         )
         return url
 
-    async def exchange_code(self, code: str, code_verifier: str) -> dict[str, Any]:
+    async def _token_request(self, call, *args, **kwargs) -> dict:
+        self.http.token_endpoint_auth_method = self._auth_method()
+        try:
+            token = await call(self.discovery.get("token_endpoint"), *args, **kwargs)
+        except OAuthError as exc:
+            if exc.error in ("invalid_grant", "invalid_client", "unauthorized_client", "access_denied"):
+                raise InvalidGrant(exc.error) from exc
+            raise TemporaryError(f"{exc.error}: {exc.description}") from exc
+        except httpx.HTTPError as exc:
+            raise TemporaryError(str(exc)) from exc
+        return dict(token)
+
+    async def exchange_code(self, code: str, code_verifier: str) -> dict:
         return await self._token_request(
             self.http.fetch_token,
-            self.discovery["token_endpoint"],
             grant_type="authorization_code",
             code=code,
             code_verifier=code_verifier,
             redirect_uri=self.settings.redirect_uri,
         )
 
-    async def refresh(self, refresh_token: str) -> dict[str, Any]:
-        token = await self._token_request(
-            self.http.refresh_token, self.discovery["token_endpoint"], refresh_token=refresh_token
-        )
-        # Authlib returns the client's own token attribute: copy it before the next await
-        return dict(token)
-
-    async def _token_request(self, call, url: str, **kwargs) -> dict[str, Any]:
-        self._configure()
-        try:
-            token = await call(url, **kwargs)
-        except OAuthError as exc:
-            if exc.error in FATAL_ERRORS:
-                raise GrantRevoked(exc.error) from exc
-            raise ServerUnavailable(exc.error) from exc
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in (400, 401):
-                raise GrantRevoked(str(exc.response.status_code)) from exc
-            raise ServerUnavailable(str(exc)) from exc
-        except (httpx.HTTPError, ValueError) as exc:
-            raise ServerUnavailable(str(exc)) from exc
-        return dict(token)
-
-    async def userinfo(self, access_token: str) -> dict[str, Any] | None:
-        """None when the server publishes no userinfo endpoint. Raises
-        GrantRevoked on 401/403 (no access to this app)."""
-        url = self.discovery.get("userinfo_endpoint")
-        if not url:
-            return None
-        try:
-            response = await self.http.request(
-                "GET", url, headers={"Authorization": f"Bearer {access_token}"}, withhold_token=True
-            )
-        except httpx.HTTPError as exc:
-            raise ServerUnavailable(str(exc)) from exc
-        if response.status_code in (401, 403):
-            raise GrantRevoked("access_denied" if response.status_code == 403 else "invalid_token")
-        if response.status_code != 200:
-            raise ServerUnavailable(f"userinfo HTTP {response.status_code}")
-        return response.json()
+    async def refresh(self, refresh_token: str) -> dict:
+        return await self._token_request(self.http.refresh_token, refresh_token=refresh_token)
 
     async def revoke(self, refresh_token: str) -> None:
-        """Best effort (RFC 7009): a failure is logged, never raised."""
-        url = self.discovery.get("revocation_endpoint")
-        if not url:
+        """Best effort: the logout never fails because of the revocation."""
+        endpoint = self.discovery.get("revocation_endpoint")
+        if not endpoint:
             return
-        self._configure()
-        self.http.revocation_endpoint_auth_method = self.http.token_endpoint_auth_method
         try:
-            response = await self.http.revoke_token(url, token=refresh_token, token_type_hint="refresh_token")  # noqa: S106 (RFC 7009 parameter, not a password)
-            if response.status_code >= 400:
-                logger.warning("refresh token revocation refused: HTTP %s", response.status_code)
+            self.http.revocation_endpoint_auth_method = self._auth_method()
+            await self.http.revoke_token(endpoint, token=refresh_token, token_type_hint="refresh_token")
+        except Exception as exc:
+            log.warning("Token revocation failed: %s", exc)
+
+    async def userinfo(self, access_token: str) -> dict:
+        endpoint = self.discovery.get("userinfo_endpoint")
+        try:
+            response = await self.http.get(endpoint, headers={"Authorization": f"Bearer {access_token}"}, auth=None)
         except httpx.HTTPError as exc:
-            logger.warning("refresh token revocation failed: %s", exc)
+            raise TemporaryError(str(exc)) from exc
+        if response.status_code in (401, 403):
+            raise InvalidGrant(f"userinfo: HTTP {response.status_code}")
+        if response.status_code != 200:
+            raise TemporaryError(f"userinfo: HTTP {response.status_code}")
+        return response.json()

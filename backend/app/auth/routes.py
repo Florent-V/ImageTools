@@ -1,181 +1,179 @@
-"""/auth/login, /auth/callback, /auth/logout, /auth/backchannel-logout, /api/me."""
-
 import logging
+import re
 import secrets
-from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
+from urllib.parse import urlencode
 
-import jwt
-from fastapi import APIRouter, Depends, Form, Request
+import httpx
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from starlette.concurrency import run_in_threadpool
+from starlette.requests import cookie_parser
 
-from .client import GrantRevoked, ServerUnavailable
-from .deps import current_user
-from .logout_token import ASYMMETRIC_ALGORITHMS, LogoutTokenError
-from .store import hash_id
+from app.auth.client import InvalidGrant, TemporaryError
+from app.auth.logout_token import InvalidToken
+from app.auth.store import hash_id
 
-if TYPE_CHECKING:
-    from . import Auth
+log = logging.getLogger("app.auth")
 
-logger = logging.getLogger("auth.routes")
+router = APIRouter()
 
-LOGIN_ATTEMPT_TTL_S = 600
 NO_STORE = {"Cache-Control": "no-store"}
 
 
 def safe_return_to(value: str | None) -> str:
-    """Local paths only: no //host, no /\\host, no scheme, no control characters."""
-    if (
-        not value
-        or not value.startswith("/")
-        or value.startswith(("//", "/\\"))
-        or any(ord(c) < 0x20 or c == "\x7f" for c in value)
-    ):
+    """Only a path of this site: `//host` and `/\\host` are read by browsers
+    as another site."""
+    if not value or not value.startswith("/") or value.startswith(("//", "/\\")):
+        return "/"
+    if "\\" in value or any(ord(c) < 32 for c in value):
         return "/"
     return value
 
 
-def auth_error(code: str) -> RedirectResponse:
-    # The front shows the error instead of starting a new login (no loop)
-    return RedirectResponse(f"/?auth_error={quote(code)}", status_code=302, headers=NO_STORE)
+def _clear_cookie(response: Response, settings) -> None:
+    response.delete_cookie(
+        settings.cookie_name, path="/", secure=settings.cookie_secure, httponly=True, samesite="lax"
+    )
 
 
-def make_router(auth: "Auth") -> APIRouter:
-    settings = auth.settings
-    store = auth.store
-    client = auth.client
-    discovery = client.discovery
-    router = APIRouter()
+def _error(status: int, code: str) -> JSONResponse:
+    return JSONResponse({"error": code}, status_code=status, headers=NO_STORE)
 
-    def unavailable() -> Response:
-        return JSONResponse({"error": "oauth_unavailable"}, status_code=503, headers=NO_STORE)
 
-    @router.get("/auth/login", include_in_schema=False)
-    async def login(return_to: str | None = None) -> Response:
-        if not discovery.ready:
-            return unavailable()
-        state = secrets.token_urlsafe(32)
-        code_verifier = secrets.token_urlsafe(64)
-        nonce = secrets.token_urlsafe(32) if "openid" in settings.scopes else None
-        await store.add_login_attempt(state, code_verifier, nonce, safe_return_to(return_to), LOGIN_ATTEMPT_TTL_S)
-        return RedirectResponse(client.authorization_url(state, code_verifier, nonce), status_code=302, headers=NO_STORE)
+@router.get("/auth/login")
+async def login(request: Request, return_to: str = "/"):
+    ctx = request.app.state.auth
+    if not ctx.discovery.ready:
+        return _error(503, "oauth_server_unavailable")
+    state = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(64)
+    nonce = secrets.token_urlsafe(24) if "openid" in ctx.settings.oauth_scopes.split() else None
+    await ctx.store.add_login_attempt(state, code_verifier, nonce, safe_return_to(return_to))
+    url = ctx.client.authorization_url(state, code_verifier, nonce)
+    return RedirectResponse(url, status_code=302, headers=NO_STORE)
 
-    @router.get("/auth/callback", include_in_schema=False)
-    async def callback(request: Request) -> Response:
-        params = request.query_params
-        if params.get("error"):
-            return auth_error(params["error"])
-        if not discovery.ready:
-            return unavailable()
-        # RFC 9207: only when the server announces it
-        if discovery.get("authorization_response_iss_parameter_supported") and params.get("iss") != settings.oauth_issuer:
-            return JSONResponse({"error": "invalid_issuer"}, status_code=400, headers=NO_STORE)
-        attempt = await store.consume_login_attempt(params.get("state", ""))
-        if attempt is None or not params.get("code"):
-            return JSONResponse({"error": "invalid_state"}, status_code=400, headers=NO_STORE)
 
-        try:
-            token = await client.exchange_code(params["code"], attempt.code_verifier)
-            user = await identify(token, attempt.nonce)
-        except GrantRevoked as exc:
-            logger.info("login refused by the OAuth server: %s", exc)
-            return auth_error("access_denied")
-        except (ServerUnavailable, jwt.PyJWTError, ValueError) as exc:
-            logger.warning("login failed: %s", exc)
-            return auth_error("server_error")
-
-        # Fresh session id at every login (session fixation); the previous one is dropped
-        previous = request.cookies.get(settings.cookie_name)
-        if previous:
-            await store.delete_session(hash_id(previous))
-        session_id = await store.create_session(
-            user["sub"], user.pop("_sid", None), user, token, int(settings.session_absolute_ttl.total_seconds())
+async def _identity(ctx, token: dict, nonce: str | None) -> dict:
+    """Who just logged in: the id_token if the server sends one, else the
+    userinfo endpoint, else the claims of an access token we can verify."""
+    verifier = ctx.verifier
+    if token.get("id_token"):
+        claims = await verifier.decode_async(
+            token["id_token"], issuer=ctx.settings.oauth_issuer, required=["iss", "aud", "exp", "sub"]
         )
-        response = RedirectResponse(attempt.return_to, status_code=302, headers=NO_STORE)
-        response.set_cookie(
-            settings.cookie_name,
-            session_id,
-            max_age=int(settings.session_absolute_ttl.total_seconds()),
-            path="/",
-            secure=settings.cookie_secure,
-            httponly=True,
-            samesite="lax",
-        )
-        return response
+        if nonce and claims.get("nonce") != nonce:
+            raise InvalidToken("nonce mismatch")
+        return claims
+    if ctx.discovery.get("userinfo_endpoint"):
+        return await ctx.client.userinfo(token["access_token"])
+    return await verifier.decode_async(token["access_token"], issuer=None, required=["aud", "exp", "sub"])
 
-    async def identify(token: dict[str, Any], nonce: str | None) -> dict[str, Any]:
-        """id_token if any, else userinfo, else the access token if it's a verifiable JWT."""
-        if token.get("id_token") and discovery.get("jwks_uri"):
-            claims = await verify_jwt(token["id_token"])
-            if nonce and claims.get("nonce") != nonce:
-                raise ValueError("id_token nonce mismatch")
-            claims["_sid"] = claims.get("sid")
-            return user_from(claims)
-        info = await client.userinfo(token["access_token"])
-        if info is not None:
-            return user_from(info)
-        if discovery.get("jwks_uri"):
-            return user_from(await verify_jwt(token["access_token"], issuer=False))
-        raise ValueError("no way to identify the user")
 
-    async def verify_jwt(value: str, issuer: bool = True) -> dict[str, Any]:
-        signing_key = await run_in_threadpool(auth.verifier.jwks(discovery["jwks_uri"]).get_signing_key_from_jwt, value)
-        if signing_key.algorithm_name not in ASYMMETRIC_ALGORITHMS:
-            raise ValueError(f"unexpected signing algorithm {signing_key.algorithm_name}")
-        return jwt.decode(
-            value,
-            signing_key.key,
-            algorithms=[signing_key.algorithm_name],
-            audience=settings.oauth_client_id,
-            issuer=settings.oauth_issuer if issuer else None,
-            options={"require": ["exp", "sub"]},
-        )
+@router.get("/auth/callback")
+async def callback(request: Request):
+    ctx = request.app.state.auth
+    params = request.query_params
 
-    def user_from(claims: dict[str, Any]) -> dict[str, Any]:
-        if not claims.get("sub"):
-            raise ValueError("no sub in the user claims")
-        return {
-            "sub": claims["sub"],
-            # Stable id (UUID) when the server provides one; sub may change (e.g. an e-mail)
-            "id": claims.get("id") or claims.get("uid") or claims["sub"],
-            "name": claims.get("name") or claims.get("preferred_username"),
-            "email": claims.get("email"),
-            "roles": claims.get("roles") or [],
-            "_sid": claims.get("_sid"),
-        }
+    if params.get("error"):
+        code = re.sub(r"[^a-z_]", "", params["error"].lower())[:64] or "error"
+        return RedirectResponse(f"/?auth_error={code}", status_code=302, headers=NO_STORE)
 
-    @router.post("/auth/logout", include_in_schema=False)
-    async def logout(request: Request) -> Response:
-        # CSRF checked by the middleware
-        session_id = request.cookies.get(settings.cookie_name)
-        session = await store.delete_session(hash_id(session_id)) if session_id else None
+    if ctx.discovery.get("authorization_response_iss_parameter_supported") and params.get("iss") != ctx.settings.oauth_issuer:
+        return _error(400, "invalid_issuer")
+
+    attempt = await ctx.store.pop_login_attempt(params.get("state", ""))
+    if attempt is None or not params.get("code"):
+        return _error(400, "invalid_state")
+
+    try:
+        token = await ctx.client.exchange_code(params["code"], attempt.code_verifier)
+        claims = await _identity(ctx, token, attempt.nonce)
+    except (InvalidGrant, InvalidToken):
+        return _error(400, "invalid_grant")
+    except (TemporaryError, httpx.HTTPError) as exc:
+        log.warning("Login failed, OAuth server error: %s", exc)
+        return _error(502, "oauth_server_error")
+
+    # The stable identifier: `id` (UUID) at this server; `sub` can change (it is the e-mail).
+    sub = str(claims.get("id") or claims.get("uid") or claims["sub"])
+    user_claims = {
+        "name": claims.get("name") or claims.get("preferred_username") or claims.get("email"),
+        "email": claims.get("email"),
+        "roles": claims.get("roles") or [],
+    }
+    session_id = await ctx.store.create_session(
+        sub=sub,
+        oauth_sid=claims.get("sid"),
+        user_claims=user_claims,
+        access_token=token["access_token"],
+        refresh_token=token.get("refresh_token", ""),
+        access_expires_at=token.get("expires_at") or 0,
+    )
+    response = RedirectResponse(attempt.return_to, status_code=302, headers=NO_STORE)
+    response.set_cookie(
+        ctx.settings.cookie_name,
+        session_id,
+        max_age=ctx.settings.session_absolute_ttl,
+        path="/",
+        secure=ctx.settings.cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
+    return response
+
+
+def _logout_redirect(ctx) -> str:
+    """Where to send the browser to end the SSO session too.
+
+    Standard servers publish `end_session_endpoint`. Otherwise fall back to the
+    `{issuer}/logout?redirect_uri=` convention of the home OAuth server, which only
+    redirects back to the origin of a registered application.
+    """
+    endpoint = ctx.discovery.get("end_session_endpoint")
+    if endpoint:
+        return endpoint
+    query = urlencode({"redirect_uri": f"{ctx.settings.public_origin}/"})
+    return f"{ctx.settings.oauth_issuer.rstrip('/')}/logout?{query}"
+
+
+@router.post("/auth/logout")
+async def logout(request: Request):
+    ctx = request.app.state.auth
+    session_id = cookie_parser(request.headers.get("cookie", "")).get(ctx.settings.cookie_name)
+    if session_id:
+        id_hash = hash_id(session_id)
+        session = await ctx.store.get_session(id_hash)
+        await ctx.store.delete_session(id_hash)
         if session and session.refresh_token:
-            await client.revoke(session.refresh_token)
-        redirect = discovery.get("end_session_endpoint") or auth.post_logout_redirect
-        response = JSONResponse({"redirect": redirect}, headers=NO_STORE)
-        response.delete_cookie(settings.cookie_name, path="/", secure=settings.cookie_secure, httponly=True, samesite="lax")
-        return response
+            await ctx.client.revoke(session.refresh_token)
+    response = JSONResponse({"redirect": _logout_redirect(ctx)}, headers=NO_STORE)
+    _clear_cookie(response, ctx.settings)
+    return response
 
-    @router.post("/auth/backchannel-logout", include_in_schema=False)
-    async def backchannel_logout(logout_token: str = Form("")) -> Response:
-        # Called by the OAuth server, not a browser: no session, no CSRF; the signature is the proof
-        try:
-            claims = await auth.verifier.verify(logout_token)
-        except LogoutTokenError as exc:
-            logger.warning("logout token rejected: %s", exc)
-            return JSONResponse({"error": "invalid_request"}, status_code=400, headers=NO_STORE)
-        if claims.get("sid"):
-            count = await store.delete_by_sid(claims["sid"])
-        else:
-            count = await store.delete_by_sub(claims["sub"])
-        logger.info("back-channel logout: %d session(s) closed", count)
-        return Response(status_code=200, headers=NO_STORE)
 
-    @router.get("/api/me")
-    async def me(user: dict[str, Any] = Depends(current_user)) -> Response:
-        return JSONResponse(
-            {key: user.get(key) for key in ("sub", "id", "name", "email", "roles")}, headers=NO_STORE
-        )
+@router.post("/auth/backchannel-logout")
+async def backchannel_logout(request: Request):
+    """Called by the OAuth server, not by a browser: no session, no CSRF check."""
+    ctx = request.app.state.auth
+    if not ctx.discovery.ready:
+        return _error(503, "oauth_server_unavailable")
+    form = await request.form()
+    token = form.get("logout_token")
+    if not isinstance(token, str) or not token:
+        return _error(400, "invalid_request")
+    try:
+        claims = await ctx.verifier.verify_logout_token(token, ctx.store)
+    except InvalidToken as exc:
+        log.warning("Logout token refused: %s", exc)
+        return _error(400, "invalid_request")
+    # No sid at this server: the logout targets the whole user (stable id, then login).
+    await ctx.store.delete_for_user(sid=claims.get("sid"), subs=(claims.get("uid"), claims.get("sub")))
+    return Response(status_code=200, headers=NO_STORE)
 
-    return router
+
+@router.get("/api/me")
+async def me(request: Request):
+    user = request.state.user
+    return JSONResponse(
+        {"sub": user.sub, "name": user.name, "email": user.email, "roles": list(user.roles)},
+        headers=NO_STORE,
+    )
