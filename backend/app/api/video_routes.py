@@ -45,7 +45,7 @@ async def video_frame(file: UploadFile = File(...), timestamp_s: float = Form(..
     with temp_video_file(data) as path:
         info = await pipeline.validate_video(path)
         try:
-            clamped = max(0.0, min(timestamp_s, info.duration_s))
+            clamped = frame.clamp_timestamp(timestamp_s, info.duration_s)
             frame_bytes = await frame.extract_frame(path, clamped)
         except FfmpegError:
             raise ImageError("VIDEO_PROCESSING_FAILED", "Could not extract a preview frame")

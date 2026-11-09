@@ -1,10 +1,16 @@
 from pathlib import Path
 
-from app.engine.video.runner import run_ffmpeg
+from app.engine.video.runner import FfmpegError, run_ffmpeg
 from app.engine.video.tempfiles import temp_output_path
 
 FRAME_TIMEOUT_S = 15
 PREVIEW_TIMESTAMP_S = 1.0
+# Seeking at (or past) the very end yields no frame on ffmpeg >= 8: stay just before it.
+END_MARGIN_S = 0.1
+
+
+def clamp_timestamp(timestamp_s: float, duration_s: float) -> float:
+    return max(0.0, min(timestamp_s, duration_s - END_MARGIN_S))
 
 
 async def extract_frame(path: Path, timestamp_s: float) -> bytes:
@@ -21,6 +27,8 @@ async def extract_frame(path: Path, timestamp_s: float) -> bytes:
             ],
             timeout_s=FRAME_TIMEOUT_S,
         )
+        if not out_path.exists() or out_path.stat().st_size == 0:
+            raise FfmpegError(f"no frame produced at {timestamp_s}s")
         return out_path.read_bytes()
 
 
