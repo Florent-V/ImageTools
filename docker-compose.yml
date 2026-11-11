@@ -15,7 +15,9 @@ services:
     environment:
       # App-specific
       IMGCONV_MAX_FILE_SIZE_MB: ${MAX_UPLOAD_MB:-50}
-      IMGCONV_MAX_MEGAPIXELS: 100
+      IMGCONV_MAX_MEGAPIXELS: ${MAX_MEGAPIXELS:-100}
+      IMGCONV_MAX_VIDEO_FILE_SIZE_MB: ${MAX_VIDEO_UPLOAD_MB:-200}
+      IMGCONV_MAX_VIDEO_DURATION_S: ${MAX_VIDEO_DURATION_S:-60}
       # Common to every app
       OAUTH_ISSUER: ${OAUTH_ISSUER}
       OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID}
@@ -56,6 +58,10 @@ services:
   web:
     build: ./frontend
     image: imagetools-web:${IMAGE_TAG:-latest}
+    environment:
+      # Caddy derives its body cap from these (largest of the two + 10 MB)
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-50}
+      MAX_VIDEO_UPLOAD_MB: ${MAX_VIDEO_UPLOAD_MB:-200}
     deploy:
       resources:
         limits:

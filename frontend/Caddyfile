@@ -12,9 +12,10 @@
 	}
 
 	handle /api/* {
-		# Upper bound: the API enforces MAX_UPLOAD_MB itself
+		# Upper bound: the API enforces MAX_UPLOAD_MB / MAX_VIDEO_UPLOAD_MB itself.
+		# MAX_BODY_MB is computed by the container CMD (see Dockerfile).
 		request_body {
-			max_size 210MB
+			max_size {$MAX_BODY_MB:210}MB
 		}
 		# flush_interval -1: stream uploads/downloads, don't buffer them in Caddy
 		reverse_proxy api:8000 {

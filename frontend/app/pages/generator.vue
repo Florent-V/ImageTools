@@ -12,7 +12,7 @@
     <DropZone
       v-if="!previewSrc"
       :read-formats="READ_FORMATS"
-      :max-file-size-mb="MAX_FILE_SIZE_MB"
+      :max-file-size-mb="formats?.limits.max_file_size_mb"
       @files-selected="onFilesSelected"
     />
 
@@ -61,12 +61,16 @@
 </template>
 
 <script setup lang="ts">
+import { fetchFormats } from '~/utils/api'
+
 // Entirely client-side: the image never leaves the browser, no backend call
 // is involved (unlike the other tools, which post to the processing API).
 // DropZone checks these against normalizedExtension(), which returns
 // upper-case canonical extensions (JPG -> JPEG, TIF -> TIFF).
 const READ_FORMATS = ['JPEG', 'PNG', 'WEBP', 'GIF', 'BMP', 'TIFF']
-const MAX_FILE_SIZE_MB = 50
+
+// Same limit as the API (/api/formats), so one setting drives every tool
+const { data: formats } = await useAsyncData('formats', fetchFormats, { server: false })
 
 const previewSrc = ref<string>()
 const file = ref<File>()
