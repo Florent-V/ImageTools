@@ -91,6 +91,11 @@ OAUTH_CLIENT_SECRET=<client_secret>
 PUBLIC_ORIGIN=https://imagetools.<domaine>
 ```
 
+Limites optionnelles (valeurs par défaut) : `MAX_UPLOAD_MB=50` (par image), `MAX_VIDEO_UPLOAD_MB=200`,
+`MAX_VIDEO_DURATION_S=60`. Les images sont envoyées une par une (3 requêtes en parallèle côté navigateur), la limite
+s'applique donc **par fichier**, sans plafond sur le nombre ni sur le total. Les vidéos sont traitées une à une.
+Le plafond de corps du Caddy `web` s'en déduit automatiquement.
+
 Ne définissez **pas** `APP_ENV` ni `COOKIE_SECURE` : les valeurs par défaut (`prod`, `true`) sont les bonnes. L'API
 refuse `COOKIE_SECURE=false` hors `APP_ENV=dev`. `FRONTEND_PORT` ne sert qu'en dev.
 

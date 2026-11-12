@@ -14,4 +14,6 @@ COPY --from=build /app/.output/public /srv
 ENV XDG_DATA_HOME=/tmp XDG_CONFIG_HOME=/tmp
 USER 10001:10001
 EXPOSE 8080
-CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+# Body cap = largest upload limit + 10 MB of multipart overhead, so raising
+# MAX_UPLOAD_MB / MAX_VIDEO_UPLOAD_MB never needs a second setting.
+CMD ["sh", "-c", "a=${MAX_UPLOAD_MB:-50}; v=${MAX_VIDEO_UPLOAD_MB:-200}; export MAX_BODY_MB=$(( (a > v ? a : v) + 10 )); exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]
