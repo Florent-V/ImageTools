@@ -14,18 +14,18 @@
     "audit": "pnpm audit --audit-level=high"
   },
   "dependencies": {
-    "@iconify-json/lucide": "^1.2.151",
+    "@iconify-json/lucide": "^1.2.155",
     "@nuxt/ui": "^4.12.0",
     "fflate": "^0.8.3",
     "nuxt": "^4.6.4",
-    "tailwindcss": "^4.3.4",
+    "tailwindcss": "^4.3.5",
     "vue": "^3.5.45",
-    "vue-router": "^5.4.0"
+    "vue-router": "^5.5.1"
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.17.0",
     "@types/node": "^24.19.2",
-    "eslint": "^10.14.0",
+    "eslint": "^10.15.0",
     "typescript": "^6.0.3",
     "vue-tsc": "^3.3.14"
   }
