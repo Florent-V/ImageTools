@@ -9,8 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY --from=ghcr.io/astral-sh/uv:0.10.5 /uv /usr/local/bin/uv
 
-# System libraries: the only app-specific block of this file
+# System libraries: the only app-specific block of this file.
+# zlib1g is upgraded explicitly: the pinned base image lags behind Debian security fixes.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends --only-upgrade zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
